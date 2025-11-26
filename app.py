@@ -505,24 +505,33 @@ else:
 st.markdown("---")
 st.subheader("💡 Insights")
 
+# -------------------------------------------------
+# Insights & Executive Summary
+# -------------------------------------------------
+st.markdown("---")
+st.subheader("💡 Insights")
+
 insights = []
 exec_parts = []
+
 
 # 1) Most profitable product
 if product_summary is not None and not product_summary.empty:
     top_prod = product_summary.iloc[0]
+
     insights.append(
-        f"**{top_prod['Product']}** is your most profitable product "
-        f"with profit of **${top_prod['Profit']:,.0f}** "
-        f"and a margin of **{top_prod['Margin %']:,.1f}%**."
-    )
-    exec_parts.append(
-        f"{top_prod['Product']} is currently your top performer, "
-        f"delivering ${top_prod['Profit']:,.0f} in profit at a "
-        f"{top_prod['Margin %']:,.1f}% margin."
+        f"{top_prod['Product']} is your most profitable product with "
+        f"profit of ${top_prod['Profit']:,.0f} and a margin of {top_prod['Margin %']:,.1f}%."
     )
 
-# 2) Latest month, MoM, YoY, trend analysis
+   exec_parts.append(
+    f"{top_prod['Product']} is currently your top performer, delivering "
+    f"${top_prod['Profit']:,.0f} in profit at a {top_prod['Margin %']:,.1f}% margin."
+)
+
+
+
+# 2) Monthly performance + MoM + YoY + Trend Analysis
 mom_phrase = ""
 yoy_phrase = ""
 trend_phrase = ""
@@ -536,58 +545,93 @@ if monthly_summary is not None and not monthly_summary.empty:
     latest_rev = latest_row["Revenue"]
     latest_prof = latest_row["Profit"]
 
+    # Main statement
     insights.append(
-        f"In the latest month (**{latest_month.strftime('%B %Y')}**), you generated "
-        f"**${latest_rev:,.0f} in ** revenue and "
-        f"**${latest_prof:,.0f} in ** profit."
+        f"In the latest month ({latest_month.strftime('%B %Y')}), you generated "
+        f"${latest_rev:,.0f} in revenue and ${latest_prof:,.0f} in profit."
     )
 
     # Month-over-month
     prev_month = latest_month - pd.DateOffset(months=1)
-    if prev_month in ms_indexed.index and ms_indexed.loc[prev_month, "Revenue"] != 0:
+    if prev_month in ms_indexed.index:
         prev_rev = ms_indexed.loc[prev_month, "Revenue"]
-        mom_rev = (latest_rev - prev_rev) / abs(prev_rev) * 100
-        mom_phrase = (
-            f"Revenue is {mom_rev:+.1f}% versus the prior month "
-            f"({prev_month.strftime('%b %Y')})."
-        )
-        insights.append(
-            f"Month-over-month, revenue changed by **{mom_rev:+.1f}%** "
-            f"compared to {prev_month.strftime('%b %Y')}."
-        )
+        if prev_rev != 0:
+            mom_rev = (latest_rev - prev_rev) / abs(prev_rev) * 100
+            insights.append(
+                f"Month-over-month, revenue changed by {mom_rev:+.1f}% compared to {prev_month.strftime('%b %Y')}."
+            )
+            mom_phrase = f"Revenue changed by {mom_rev:+.1f}% versus {prev_month.strftime('%b %Y')}."
 
     # Year-over-year
     prev_year = latest_month - pd.DateOffset(years=1)
-    if prev_year in ms_indexed.index and ms_indexed.loc[prev_year, "Revenue"] != 0:
+    if prev_year in ms_indexed.index:
         prev_year_rev = ms_indexed.loc[prev_year, "Revenue"]
-        yoy_rev = (latest_rev - prev_year_rev) / abs(prev_year_rev) * 100
-        yoy_phrase = (
-            f"Compared with {prev_year.strftime('%b %Y')}, "
-            f"revenue is {yoy_rev:+.1f}%."
-        )
-        insights.append(
-            f"Year-over-year, revenue for {latest_month.strftime('%B')} is "
-            f"**{yoy_rev:+.1f}%** versus {prev_year.strftime('%B %Y')}."
-        )
+        if prev_year_rev != 0:
+            yoy_rev = (latest_rev - prev_year_rev) / abs(prev_year_rev) * 100
+            insights.append(
+                f"Year-over-year, revenue for {latest_month.strftime('%B')} is {yoy_rev:+.1f}% versus {prev_year.strftime('%B %Y')}."
+            )
+            yoy_phrase = f"Compared with {prev_year.strftime('%B %Y')}, revenue is {yoy_rev:+.1f}%."
 
     # Trend - last 3 months
     if len(ms) >= 3:
         last3 = ms.tail(3)
         revs = last3["Revenue"].values
         if np.all(np.diff(revs) > 0):
-            trend_phrase = "Revenue has been trending **up** over the last three months."
-            insights.append("Revenue has been trending **up** over the last three months.")
+            trend_phrase = "Revenue has been trending up over the last three months."
+            insights.append("Revenue has been trending up over the last three months.")
         elif np.all(np.diff(revs) < 0):
-            trend_phrase = "Revenue has been trending **down** over the last three months."
-            insights.append(
-                "Revenue has been trending **down** over the last three months."
-            )
+            trend_phrase = "Revenue has been trending down over the last three months."
+            insights.append("Revenue has been trending down over the last three months.")
 
     exec_parts.append(
         f"In {latest_month.strftime('%B %Y')}, the business generated "
         f"${latest_rev:,.0f} in revenue and ${latest_prof:,.0f} in profit. "
-        f"{mom_phrase} {yoy_phrase} {trend_phrase}"
+        f"{mom_phrase} {yoy_phrase} {trend_phrase}".strip()
     )
+
+
+# 3) Loss warnings
+loss_warnings = []
+
+# Products with negative profit
+if product_summary is not None and not product_summary.empty:
+    loss_products = product_summary[product_summary["Profit"] < 0]
+    if not loss_products.empty:
+        names = ", ".join(loss_products["Product"].head(3).astype(str))
+        loss_warnings.append(f"Loss-making products include: {names}.")
+
+# Months with negative profit
+if monthly_summary is not None and not monthly_summary.empty:
+    loss_months = monthly_summary[monthly_summary["Profit"] < 0]
+    if not loss_months.empty:
+        months_list = ", ".join(loss_months["Month"].dt.strftime("%b %Y"))
+        loss_warnings.append(f"Some months show negative profit, such as {months_list}.")
+
+for w in loss_warnings:
+    insights.append("⚠️ " + w)
+
+if loss_warnings:
+    exec_parts.append("Additionally, " + " ".join(w.rstrip('.') + "." for w in loss_warnings))
+
+
+# Display insights bullets
+if not insights:
+    st.write("Insights will appear here once data is mapped.")
+else:
+    for bullet in insights:
+        st.markdown(f"- {bullet}")
+
+
+# Build Executive Summary
+executive_summary = " ".join(exec_parts).strip()
+if not executive_summary:
+    executive_summary = "A summary could not be generated based on available data."
+
+st.markdown("---")
+st.subheader("📝 Executive Summary")
+st.markdown(executive_summary)
+
 
 # 3) Loss warnings
 loss_warnings = []
@@ -706,4 +750,5 @@ st.download_button(
 st.success(
     "Analysis complete. Adjust mappings or upload new files to refresh the dashboard."
 )
+
 
