@@ -5,4 +5,5 @@ numpy
 openpyxl
 reportlab
 kaleido
+Pillow
 
