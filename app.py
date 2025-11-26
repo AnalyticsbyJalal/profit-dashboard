@@ -296,18 +296,25 @@ def generate_pdf_report(total_revenue, total_cost, total_profit, margin_pct,
     y -= 15
     c.drawString(40, y, f"Profit Margin: {margin_pct:,.1f}%")
 
-    # Main chart
+    # Try to draw charts, but don't crash if kaleido / to_image fails
     y -= 30
     if main_fig is not None:
-        png = main_fig.to_image(format="png")
-        img = ImageReader(BytesIO(png))
-        c.drawImage(img, 40, y - 210, width=520, height=200, preserveAspectRatio=True)
-        y -= 230
+        try:
+            png = main_fig.to_image(format="png")
+            img = ImageReader(BytesIO(png))
+            c.drawImage(img, 40, y - 210, width=520, height=200, preserveAspectRatio=True)
+            y -= 230
+        except Exception:
+            # Skip chart if rendering fails (e.g. on Streamlit Cloud)
+            pass
 
     if yoy_fig is not None:
-        png = yoy_fig.to_image(format="png")
-        img = ImageReader(BytesIO(png))
-        c.drawImage(img, 40, y - 210, width=520, height=200, preserveAspectRatio=True)
+        try:
+            png = yoy_fig.to_image(format="png")
+            img = ImageReader(BytesIO(png))
+            c.drawImage(img, 40, y - 210, width=520, height=200, preserveAspectRatio=True)
+        except Exception:
+            pass
 
     # Product table
     c.showPage()
@@ -371,6 +378,7 @@ def generate_pdf_report(total_revenue, total_cost, total_profit, margin_pct,
     c.save()
     buf.seek(0)
     return buf.getvalue()
+
 
 
 def generate_insights(monthly, product_summary, category_summary):
@@ -707,3 +715,4 @@ if files:
         st.success("Analysis complete. Adjust filters or upload new files to refresh.")
 else:
     st.info("📁 Upload one or more CSV/XLSX files to get started.")
+
