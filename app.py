@@ -478,9 +478,9 @@ if product_summary is not None and not product_summary.empty:
 if monthly_summary is not None and not monthly_summary.empty:
     last_row = monthly_summary.iloc[-1]
     insights.append(
-    f"In the latest month (**{latest_month:%B %Y}**), you generated "
+    f"In the latest month (**{latest_month.strftime('%B %Y')}**), you generated "
     f"**${latest_revenue:,.0f} in revenue** and **${latest_profit:,.0f} in profit**."
-    )
+)
 
 if not insights:
     st.write("Insights will appear here once you map your columns.")
@@ -544,6 +544,7 @@ st.download_button(
 )
 
 st.success("Analysis complete. Adjust mappings or upload new files to refresh the dashboard.")
+
 
 
 
