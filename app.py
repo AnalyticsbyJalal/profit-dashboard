@@ -465,27 +465,7 @@ else:
 # Insights
 # -------------------------------------------------
 st.markdown("---")
-st.subheader("💡 Insights")
 
-# ---------------------------
-# Generate Insights
-# ---------------------------
-insights = []
-
-# 1. Most profitable product
-if "product" in df.columns:
-    product_profit = df.groupby("product")["__profit__"].sum().sort_values(ascending=False)
-    top_product = product_profit.index[0]
-    top_product_profit = product_profit.iloc[0]
-    top_margin = (
-        df[df["product"] == top_product]["__profit__"].sum()
-        / df[df["product"] == top_product]["__revenue__"].sum()
-    ) * 100
-
-    insights.append(
-        f"{top_product} is your most profitable product with profit of "
-        f"**${top_product_profit:,.0f}** and a margin of **{top_margin:.1f}%**."
-    )
 
 
 # 2. Latest month performance
@@ -580,6 +560,7 @@ st.download_button(
 )
 
 st.success("Analysis complete. Adjust mappings or upload new files to refresh the dashboard.")
+
 
 
 
