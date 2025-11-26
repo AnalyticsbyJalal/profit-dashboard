@@ -538,8 +538,8 @@ if monthly_summary is not None and not monthly_summary.empty:
 
     insights.append(
         f"In the latest month (**{latest_month.strftime('%B %Y')}**), you generated "
-        f"**${latest_rev:,.0f} in revenue** and "
-        f"**${latest_prof:,.0f} in profit**."
+        f"**${latest_rev:,.0f} in ** revenue and "
+        f"**${latest_prof:,.0f} in ** profit."
     )
 
     # Month-over-month
@@ -706,3 +706,4 @@ st.download_button(
 st.success(
     "Analysis complete. Adjust mappings or upload new files to refresh the dashboard."
 )
+
