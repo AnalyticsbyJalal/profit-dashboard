@@ -6,7 +6,6 @@ import plotly.graph_objects as go
 
 from io import BytesIO
 from datetime import datetime
-
 from PIL import Image, UnidentifiedImageError
 
 from reportlab.pdfgen import canvas
@@ -59,34 +58,32 @@ def build_monthly_summary(df, date_col, rev_col, cost_col):
 
     temp["Month"] = temp["__date__"].dt.to_period("M").dt.to_timestamp()
 
-    group_cols = ["Month"]
-    agg = {
-        "__revenue__": "sum",
-    }
+    agg = {"__revenue__": "sum"}
     if cost_col is not None:
         agg["__cost__"] = "sum"
 
-    temp = temp.groupby(group_cols, dropna=False).agg(agg).reset_index()
-    temp["Revenue"] = temp["__revenue__"]
+    g = temp.groupby("Month", dropna=False).agg(agg).reset_index()
+    g["Revenue"] = g["__revenue__"]
     if cost_col is not None:
-        temp["Cost"] = temp["__cost__"]
-        temp["Profit"] = temp["Revenue"] - temp["Cost"]
+        g["Cost"] = g["__cost__"]
+        g["Profit"] = g["Revenue"] - g["Cost"]
     else:
-        temp["Cost"] = 0.0
-        temp["Profit"] = temp["Revenue"]
-    return temp
+        g["Cost"] = 0.0
+        g["Profit"] = g["Revenue"]
+
+    return g[["Month", "Revenue", "Cost", "Profit"]]
 
 
 def build_product_summary(df, product_col, rev_col, cost_col):
     if product_col is None:
         return None
     temp = df.copy()
-    group_cols = [product_col]
+
     agg = {"__revenue__": "sum"}
     if cost_col is not None:
         agg["__cost__"] = "sum"
 
-    g = temp.groupby(group_cols, dropna=False).agg(agg).reset_index()
+    g = temp.groupby(product_col, dropna=False).agg(agg).reset_index()
     g.rename(columns={product_col: "Product"}, inplace=True)
 
     g["Revenue"] = g["__revenue__"]
@@ -100,12 +97,13 @@ def build_product_summary(df, product_col, rev_col, cost_col):
     g["Margin %"] = np.where(
         g["Revenue"].abs() > 1e-9, g["Profit"] / g["Revenue"] * 100, np.nan
     )
+
     g = g.sort_values("Profit", ascending=False)
     return g[["Product", "Revenue", "Cost", "Profit", "Margin %"]]
 
 
 def build_waterfall_latest_month(monthly_df: pd.DataFrame):
-    """Waterfall chart using graph_objects (works even without px.waterfall)."""
+    """Waterfall chart using graph_objects (works without px.waterfall)."""
     if monthly_df is None or monthly_df.empty:
         return None
 
@@ -143,8 +141,9 @@ def generate_pdf_report(
     main_fig,
     monthly_summary: pd.DataFrame,
     product_summary: pd.DataFrame,
+    executive_summary: str,
 ):
-    """Build a PDF report with KPIs, an optional chart, and tables."""
+    """Build a PDF report with KPIs, chart (if possible), summary and tables."""
     buf = BytesIO()
     c = canvas.Canvas(buf, pagesize=letter)
     width, height = letter
@@ -153,9 +152,37 @@ def generate_pdf_report(
     c.setFont("Helvetica-Bold", 18)
     c.drawString(40, height - 50, "Business Profit Report")
 
-    # KPIs
-    c.setFont("Helvetica", 11)
+    # Executive summary
     y = height - 80
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(40, y, "Executive Summary")
+    y -= 15
+    c.setFont("Helvetica", 10)
+
+    if executive_summary:
+        # simple wrap by splitting into lines
+        words = executive_summary.split()
+        line = ""
+        for w in words:
+            test = (line + " " + w).strip()
+            if c.stringWidth(test, "Helvetica", 10) > width - 80:
+                c.drawString(40, y, line)
+                y -= 12
+                line = w
+            else:
+                line = test
+        if line:
+            c.drawString(40, y, line)
+            y -= 20
+    else:
+        c.drawString(40, y, "No summary available.")
+        y -= 20
+
+    # KPIs
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(40, y, "Key Metrics")
+    y -= 15
+    c.setFont("Helvetica", 10)
     c.drawString(40, y, f"Total Revenue: ${total_revenue:,.0f}")
     y -= 15
     c.drawString(40, y, f"Total Cost:    ${total_cost:,.0f}")
@@ -277,7 +304,6 @@ with st.sidebar:
     st.markdown("---")
     st.markdown("**Upload your data on the main panel to begin.**")
 
-# Header
 header_col1, header_col2 = st.columns([1, 5])
 with header_col1:
     if logo is not None:
@@ -319,7 +345,6 @@ if not uploaded_files:
 # Read and combine data
 # -------------------------------------------------
 all_frames = []
-
 for upl in uploaded_files:
     name = upl.name.lower()
     if name.endswith(".csv"):
@@ -328,7 +353,6 @@ for upl in uploaded_files:
         # Excel: support multi-sheet workbooks
         xls = pd.read_excel(upl, sheet_name=None)
         df_part = pd.concat(xls.values(), ignore_index=True)
-
     all_frames.append(df_part)
 
 df_raw = pd.concat(all_frames, ignore_index=True)
@@ -345,7 +369,7 @@ st.subheader("⚙️ Column Mapping")
 
 all_columns = list(df_raw.columns)
 
-# Guess defaults
+
 def guess(col_candidates):
     for c in all_columns:
         lc = str(c).lower()
@@ -357,20 +381,29 @@ def guess(col_candidates):
 rev_guess = guess(["revenue", "sales", "amount", "total"])
 cost_guess = guess(["cost", "cogs", "expense"])
 date_guess = guess(["date", "day", "month"])
-product_guess = guess(["product", "item", "sku"])
+product_guess = guess(["product", "item", "sku", "category"])
 
-revenue_col = st.selectbox("Revenue column", all_columns, index=all_columns.index(rev_guess) if rev_guess in all_columns else 0)
+revenue_col = st.selectbox(
+    "Revenue column",
+    all_columns,
+    index=all_columns.index(rev_guess) if rev_guess in all_columns else 0,
+)
 cost_col_opt = st.selectbox(
-    "Cost column (optional)", ["None"] + all_columns,
-    index=(["None"] + all_columns).index(cost_guess) if cost_guess in all_columns else 0
+    "Cost column (optional)",
+    ["None"] + all_columns,
+    index=(["None"] + all_columns).index(cost_guess) if cost_guess in all_columns else 0,
 )
 date_col_opt = st.selectbox(
-    "Date column (optional)", ["None"] + all_columns,
-    index=(["None"] + all_columns).index(date_guess) if date_guess in all_columns else 0
+    "Date column (optional)",
+    ["None"] + all_columns,
+    index=(["None"] + all_columns).index(date_guess) if date_guess in all_columns else 0,
 )
 product_col_opt = st.selectbox(
-    "Product column (optional)", ["None"] + all_columns,
-    index=(["None"] + all_columns).index(product_guess) if product_guess in all_columns else 0
+    "Product column (optional)",
+    ["None"] + all_columns,
+    index=(["None"] + all_columns).index(product_guess)
+    if product_guess in all_columns
+    else 0,
 )
 
 cost_col = None if cost_col_opt == "None" else cost_col_opt
@@ -385,8 +418,13 @@ if cost_col is not None:
     df["__cost__"] = clean_number(df[cost_col])
 else:
     df["__cost__"] = 0.0
-
 df["__profit__"] = df["__revenue__"] - df["__cost__"]
+
+# Keep mapped names for later insights
+if date_col is not None:
+    df["__date_mapped__"] = pd.to_datetime(df[date_col], errors="coerce")
+if product_col is not None:
+    df["__product_mapped__"] = df[product_col]
 
 
 # -------------------------------------------------
@@ -416,7 +454,6 @@ st.markdown("---")
 st.subheader("📊 Revenue & Profit Over Time")
 
 main_fig = None
-
 if monthly_summary is not None and not monthly_summary.empty:
     melted = monthly_summary.melt(
         id_vars="Month",
@@ -435,8 +472,9 @@ if monthly_summary is not None and not monthly_summary.empty:
     main_fig.update_layout(margin=dict(t=40, l=40, r=20, b=40))
     st.plotly_chart(main_fig, use_container_width=True)
 else:
-    st.info("No valid date column selected or all dates are invalid. Time series chart is skipped.")
-
+    st.info(
+        "No valid date column selected or all dates are invalid. Time series chart is skipped."
+    )
 
 # Waterfall chart (latest month)
 st.subheader("📉 Latest Month Waterfall")
@@ -462,47 +500,148 @@ else:
 
 
 # -------------------------------------------------
-# Insights
+# Insights & Executive Summary
 # -------------------------------------------------
 st.markdown("---")
+st.subheader("💡 Insights")
 
+insights = []
+exec_parts = []
 
-
-# 2. Latest month performance
-if "date" in df.columns:
-    df["month"] = df["date"].dt.to_period("M")
-    monthly_summary = df.groupby("month").agg(
-        revenue=("__revenue__", "sum"),
-        cost=("__cost__", "sum"),
-        profit=("__profit__", "sum"),
+# 1) Most profitable product
+if product_summary is not None and not product_summary.empty:
+    top_prod = product_summary.iloc[0]
+    insights.append(
+        f"**{top_prod['Product']}** is your most profitable product "
+        f"with profit of **${top_prod['Profit']:,.0f}** "
+        f"and a margin of **{top_prod['Margin %']:,.1f}%**."
+    )
+    exec_parts.append(
+        f"{top_prod['Product']} is currently your top performer, "
+        f"delivering ${top_prod['Profit']:,.0f} in profit at a "
+        f"{top_prod['Margin %']:,.1f}% margin."
     )
 
-    latest_month = monthly_summary.index.max().to_timestamp()
-    latest_revenue = monthly_summary.loc[monthly_summary.index.max(), "revenue"]
-    latest_profit = monthly_summary.loc[monthly_summary.index.max(), "profit"]
+# 2) Latest month, MoM, YoY, trend analysis
+mom_phrase = ""
+yoy_phrase = ""
+trend_phrase = ""
+
+if monthly_summary is not None and not monthly_summary.empty:
+    ms = monthly_summary.sort_values("Month").copy()
+    ms_indexed = ms.set_index("Month")
+
+    latest_row = ms.iloc[-1]
+    latest_month = latest_row["Month"]
+    latest_rev = latest_row["Revenue"]
+    latest_prof = latest_row["Profit"]
 
     insights.append(
         f"In the latest month (**{latest_month.strftime('%B %Y')}**), you generated "
-        f"**${latest_revenue:,.0f} in revenue** and **${latest_profit:,.0f} in profit**."
+        f"**${latest_rev:,.0f} in revenue** and "
+        f"**${latest_prof:,.0f} in profit**."
     )
 
+    # Month-over-month
+    prev_month = latest_month - pd.DateOffset(months=1)
+    if prev_month in ms_indexed.index and ms_indexed.loc[prev_month, "Revenue"] != 0:
+        prev_rev = ms_indexed.loc[prev_month, "Revenue"]
+        mom_rev = (latest_rev - prev_rev) / abs(prev_rev) * 100
+        mom_phrase = (
+            f"Revenue is {mom_rev:+.1f}% versus the prior month "
+            f"({prev_month.strftime('%b %Y')})."
+        )
+        insights.append(
+            f"Month-over-month, revenue changed by **{mom_rev:+.1f}%** "
+            f"compared to {prev_month.strftime('%b %Y')}."
+        )
 
-# 3. Best month overall
-best_month_idx = monthly_summary["profit"].idxmax()
-best_month = best_month_idx.to_timestamp()
-best_month_profit = monthly_summary.loc[best_month_idx, "profit"]
+    # Year-over-year
+    prev_year = latest_month - pd.DateOffset(years=1)
+    if prev_year in ms_indexed.index and ms_indexed.loc[prev_year, "Revenue"] != 0:
+        prev_year_rev = ms_indexed.loc[prev_year, "Revenue"]
+        yoy_rev = (latest_rev - prev_year_rev) / abs(prev_year_rev) * 100
+        yoy_phrase = (
+            f"Compared with {prev_year.strftime('%b %Y')}, "
+            f"revenue is {yoy_rev:+.1f}%."
+        )
+        insights.append(
+            f"Year-over-year, revenue for {latest_month.strftime('%B')} is "
+            f"**{yoy_rev:+.1f}%** versus {prev_year.strftime('%B %Y')}."
+        )
 
-insights.append(
-    f"Your best month was **{best_month.strftime('%B %Y')}** with "
-    f"**${best_month_profit:,.0f}** in total profit."
-)
+    # Trend - last 3 months
+    if len(ms) >= 3:
+        last3 = ms.tail(3)
+        revs = last3["Revenue"].values
+        if np.all(np.diff(revs) > 0):
+            trend_phrase = "Revenue has been trending **up** over the last three months."
+            insights.append("Revenue has been trending **up** over the last three months.")
+        elif np.all(np.diff(revs) < 0):
+            trend_phrase = "Revenue has been trending **down** over the last three months."
+            insights.append(
+                "Revenue has been trending **down** over the last three months."
+            )
 
+    exec_parts.append(
+        f"In {latest_month.strftime('%B %Y')}, the business generated "
+        f"${latest_rev:,.0f} in revenue and ${latest_prof:,.0f} in profit. "
+        f"{mom_phrase} {yoy_phrase} {trend_phrase}"
+    )
 
+# 3) Loss warnings
+loss_warnings = []
+
+# Products with negative profit
+if product_summary is not None and not product_summary.empty:
+    loss_products = product_summary[product_summary["Profit"] < 0].sort_values(
+        "Profit"
+    )
+    if not loss_products.empty:
+        names = ", ".join(loss_products["Product"].head(3).astype(str).tolist())
+        loss_warnings.append(
+            f"The following products are loss-making: **{names}** "
+            f"(negative profit)."
+        )
+
+# Months with negative profit
+if monthly_summary is not None and not monthly_summary.empty:
+    loss_months = monthly_summary[monthly_summary["Profit"] < 0]
+    if not loss_months.empty:
+        months_str = ", ".join(
+            loss_months["Month"].dt.strftime("%b %Y").head(3).tolist()
+        )
+        loss_warnings.append(
+            f"Some months show negative profit, including **{months_str}**."
+        )
+
+for warning in loss_warnings:
+    insights.append(f"⚠️ {warning}")
+
+if loss_warnings:
+    exec_parts.append(
+        "However, there are areas of risk: "
+        + " ".join(warning.rstrip(".") + "." for warning in loss_warnings)
+    )
+
+# Fallback if no insights
 if not insights:
     st.write("Insights will appear here once you map your columns.")
 else:
     for bullet in insights:
         st.markdown(f"- {bullet}")
+
+# Build executive summary paragraph
+executive_summary = " ".join(exec_parts).strip()
+if not executive_summary:
+    executive_summary = (
+        "The uploaded data has been processed, but there was not enough "
+        "information to generate a detailed narrative summary."
+    )
+
+st.markdown("---")
+st.subheader("📝 Executive Summary")
+st.markdown(executive_summary)
 
 
 # -------------------------------------------------
@@ -548,8 +687,13 @@ pdf_bytes = generate_pdf_report(
     total_profit=total_profit,
     margin_pct=margin_pct,
     main_fig=main_fig,
-    monthly_summary=monthly_summary,
-    product_summary=product_summary if product_summary is not None else pd.DataFrame(),
+    monthly_summary=monthly_summary
+    if monthly_summary is not None
+    else pd.DataFrame(),
+    product_summary=product_summary
+    if product_summary is not None
+    else pd.DataFrame(),
+    executive_summary=executive_summary,
 )
 
 st.download_button(
@@ -559,12 +703,6 @@ st.download_button(
     mime="application/pdf",
 )
 
-st.success("Analysis complete. Adjust mappings or upload new files to refresh the dashboard.")
-
-
-
-
-
-
-
-
+st.success(
+    "Analysis complete. Adjust mappings or upload new files to refresh the dashboard."
+)
