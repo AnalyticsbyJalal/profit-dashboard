@@ -467,20 +467,56 @@ else:
 st.markdown("---")
 st.subheader("💡 Insights")
 
+# ---------------------------
+# Generate Insights
+# ---------------------------
 insights = []
-if product_summary is not None and not product_summary.empty:
-    top_prod = product_summary.iloc[0]
+
+# 1. Most profitable product
+if "product" in df.columns:
+    product_profit = df.groupby("product")["__profit__"].sum().sort_values(ascending=False)
+    top_product = product_profit.index[0]
+    top_product_profit = product_profit.iloc[0]
+    top_margin = (
+        df[df["product"] == top_product]["__profit__"].sum()
+        / df[df["product"] == top_product]["__revenue__"].sum()
+    ) * 100
+
     insights.append(
-        f"**{top_prod['Product']}** is your most profitable product "
-        f"with profit of **${top_prod['Profit']:,.0f}** and a margin of **{top_prod['Margin %']:,.1f}%**."
+        f"{top_product} is your most profitable product with profit of "
+        f"**${top_product_profit:,.0f}** and a margin of **{top_margin:.1f}%**."
     )
 
-if monthly_summary is not None and not monthly_summary.empty:
-    last_row = monthly_summary.iloc[-1]
+
+# 2. Latest month performance
+if "date" in df.columns:
+    df["month"] = df["date"].dt.to_period("M")
+    monthly_summary = df.groupby("month").agg(
+        revenue=("__revenue__", "sum"),
+        cost=("__cost__", "sum"),
+        profit=("__profit__", "sum"),
+    )
+
+    latest_month = monthly_summary.index.max().to_timestamp()
+    latest_revenue = monthly_summary.loc[monthly_summary.index.max(), "revenue"]
+    latest_profit = monthly_summary.loc[monthly_summary.index.max(), "profit"]
+
     insights.append(
-    f"In the latest month (**{latest_month.strftime('%B %Y')}**), you generated "
-    f"**${latest_revenue:,.0f} in revenue** and **${latest_profit:,.0f} in profit**."
+        f"In the latest month (**{latest_month.strftime('%B %Y')}**), you generated "
+        f"**${latest_revenue:,.0f} in revenue** and **${latest_profit:,.0f} in profit**."
+    )
+
+
+# 3. Best month overall
+best_month_idx = monthly_summary["profit"].idxmax()
+best_month = best_month_idx.to_timestamp()
+best_month_profit = monthly_summary.loc[best_month_idx, "profit"]
+
+insights.append(
+    f"Your best month was **{best_month.strftime('%B %Y')}** with "
+    f"**${best_month_profit:,.0f}** in total profit."
 )
+
 
 if not insights:
     st.write("Insights will appear here once you map your columns.")
@@ -544,6 +580,7 @@ st.download_button(
 )
 
 st.success("Analysis complete. Adjust mappings or upload new files to refresh the dashboard.")
+
 
 
 
