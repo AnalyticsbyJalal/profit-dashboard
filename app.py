@@ -1,3 +1,4 @@
+from PIL import Image
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -7,11 +8,23 @@ from io import StringIO, BytesIO
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import letter
 from reportlab.lib.utils import ImageReader
+# Load logo for page icon + header
+logo = Image.open("logo.png")
 
 # ----------------------------
 # Layout & Theme
 # ----------------------------
-st.set_page_config(page_title="Business Profit Dashboard", layout="wide")
+st.set_page_config(
+    page_title="Business Profit Dashboard - AnalyticsByJalal",
+    page_icon=logo,
+    layout="wide"
+)
+with st.sidebar:
+    st.image(logo, use_column_width=True)
+    st.markdown("### AnalyticsByJalal")
+    st.markdown("Smart Insights. Real Growth.")
+    st.markdown("---")
+
 
 st.markdown("""
 <style>
@@ -434,8 +447,26 @@ def generate_insights(monthly, product_summary, category_summary):
 # ----------------------------
 # Main UI
 # ----------------------------
-st.title("📊 Business Profit Dashboard")
+# --- Branded Header ---
+header_col1, header_col2 = st.columns([1, 5])
+
+with header_col1:
+    st.image(logo, width=80)
+
+with header_col2:
+    st.markdown(
+        "<h1 style='margin-bottom:0px; color:#0A2540;'>AnalyticsByJalal</h1>",
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        "<p style='margin-top:4px; font-size:16px; color:#4A5568;'>Smart Insights. Real Growth.</p>",
+        unsafe_allow_html=True,
+    )
+
+st.markdown("### Business Profit Dashboard")
 st.caption("Corporate-style analytics for revenue, cost, profit, and margin performance.")
+st.markdown("---")
+
 
 files = st.file_uploader(
     "Upload one or more CSV/XLSX files",
@@ -715,4 +746,5 @@ if files:
         st.success("Analysis complete. Adjust filters or upload new files to refresh.")
 else:
     st.info("📁 Upload one or more CSV/XLSX files to get started.")
+
 
