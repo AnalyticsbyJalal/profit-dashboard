@@ -1,5 +1,5 @@
-# app.py – Clean, stable version
-# ------------------------------
+# app.py – Clean, stable version (Settings page simplified)
+# ---------------------------------------------------------
 # Features:
 # - CSV/XLSX upload
 # - Column mapping (date / product / revenue / cost)
@@ -9,7 +9,7 @@
 # - Insights + Executive Summary (no markdown glitches)
 # - Multi-page navigation (Dashboard / Raw Data / Settings)
 #
-# Upgrade flags are still here for future auth/AI/forecasting/PDF work.
+# Upgrade flags are kept for future auth/AI/forecasting/PDF work.
 
 from __future__ import annotations
 
@@ -392,22 +392,24 @@ def render_raw_data(df: pd.DataFrame, monthly_summary: pd.DataFrame, product_sum
 
 
 def render_settings():
-    st.markdown("## Settings / Info")
-
-    st.markdown("### What this app does")
-    st.write(
+    """
+    Super-simple settings/info page – only one markdown call to avoid
+    any possible AttributeError inside Streamlit helpers.
+    """
+    st.markdown(
         """
+        ## Settings / Info
+
+        ### What this app does
+
         - Uploads CSV or Excel sales/profit data.  
         - Lets you map revenue, cost, date, and product columns.  
         - Computes total revenue, cost, profit, and margins.  
         - Shows KPIs, charts, tables, insights, and an executive summary.  
-        - Has hooks for future authentication, AI insights, forecasting, and PDF export.
-        """
-    )
+        - Has hooks for future authentication, AI insights, forecasting, and PDF export.  
 
-    st.markdown("### Upgrade roadmap")
-    st.write(
-        """
+        ### Upgrade roadmap
+
         1. **User authentication** (Streamlit Authenticator / Supabase).  
         2. **Forecasting** (linear regression, Prophet, ARIMA – 3/6/12-month projections).  
         3. **AI insights** (ChatGPT-powered commentary and strategy).  
