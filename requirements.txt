@@ -1,11 +1,15 @@
 streamlit
 pandas
-plotly
 numpy
-openpyxl
-reportlab
-kaleido
+plotly
 Pillow
-XlsxWriter
+xlsxwriter
+
+# Optional features (safe to include even if flags are false)
+openai
+streamlit-authenticator
+fpdf
+
+
 
 
