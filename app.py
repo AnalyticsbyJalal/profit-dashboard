@@ -1,4 +1,5 @@
 import io
+import os
 from datetime import datetime
 
 import numpy as np
@@ -252,9 +253,9 @@ def build_excel_download(df, monthly_summary, product_summary):
 # LAYOUT – SIDEBAR: FILE & FILTERS
 # =========================================================
 
-st.sidebar.image("logo.png", use_column_width=True) if "logo.png" in (
-    "logo.png",
-) else None
+if os.path.exists("logo.png"):
+    st.sidebar.image("logo.png", use_column_width=True)
+
 st.sidebar.title("Business Profit Dashboard")
 
 page = st.sidebar.radio(
@@ -566,3 +567,4 @@ ENABLE_PDF_EXPORT = False  # True to enable PDF download
             "Built by **AnalyticsbyJalal** · Use this as a demo app or a starting point "
             "for a client-facing analytics product."
         )
+
