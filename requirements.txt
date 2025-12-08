@@ -2,13 +2,13 @@ streamlit
 pandas
 numpy
 plotly
-Pillow
+openpyxl
 xlsxwriter
 
-# Optional features (safe to include even if flags are false)
-openai
-streamlit-authenticator
-fpdf
+openai        # for AI insights
+fpdf2         # for PDF export (if you decide to fully use it later)
+
+
 
 
 
