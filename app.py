@@ -1,5 +1,4 @@
 import io
-import os
 from datetime import datetime
 
 import numpy as np
@@ -8,17 +7,7 @@ import plotly.express as px
 import streamlit as st
 
 # =========================================================
-# FEATURE FLAGS
-# =========================================================
-ENABLE_AUTH = False            # Password gate (set password in st.secrets["APP_PASSWORD"])
-ENABLE_FORECASTING = True      # Show Forecasting page (simple regression)
-ENABLE_AI_INSIGHTS = False     # Use OpenAI for extra narrative (requires openai + API key)
-ENABLE_PDF_EXPORT = False      # Placeholder for PDF export (requires fpdf2 or similar)
-ENABLE_ADVANCED_FILTERS = True # Product/date + region/customer filters
-
-
-# =========================================================
-# PAGE CONFIG + THEME
+# BASIC APP CONFIG
 # =========================================================
 st.set_page_config(
     page_title="Business Profit Dashboard",
@@ -26,128 +15,80 @@ st.set_page_config(
     layout="wide",
 )
 
-LIGHT_CORPORATE_CSS = """
-<style>
-/* Main background */
-.reportview-container .main {
-    background-color: #f5f7fb;
-}
-
-/* Light sidebar theme */
-[data-testid="stSidebar"] {
-    background-color: #ffffff;
-    color: #111827;
-    border-right: 1px solid #e5e7eb;
-}
-
-/* Sidebar headings */
-[data-testid="stSidebar"] h1,
-[data-testid="stSidebar"] h2,
-[data-testid="stSidebar"] h3,
-[data-testid="stSidebar"] h4 {
-    color: #111827;
-}
-
-/* Metric cards */
-.metric-card {
-    padding: 18px 20px;
-    border-radius: 12px;
-    background-color: #ffffff;
-    box-shadow: 0 2px 6px rgba(15, 28, 63, 0.08);
-    border: 1px solid #e1e4f0;
-}
-.metric-label {
-    font-size: 0.85rem;
-    color: #6b7280;
-    font-weight: 500;
-}
-.metric-value {
-    font-size: 1.6rem;
-    font-weight: 700;
-    color: #111827;
-}
-.metric-sub {
-    font-size: 0.8rem;
-    color: #9ca3af;
-}
-
-/* Section cards */
-.section-card {
-    padding: 18px 20px;
-    border-radius: 12px;
-    background-color: #ffffff;
-    box-shadow: 0 2px 6px rgba(15, 28, 63, 0.05);
-    border: 1px solid #e1e4f0;
-}
-</style>
-"""
-st.markdown(LIGHT_CORPORATE_CSS, unsafe_allow_html=True)
-
-
-# =========================================================
-# AUTHENTICATION (optional)
-# =========================================================
-def check_auth():
-    """Very simple password gate using st.secrets['APP_PASSWORD']."""
-    correct_password = st.secrets.get("APP_PASSWORD", "").strip()
-    if not correct_password:
-        st.warning(
-            "Authentication is enabled, but no `APP_PASSWORD` is set in Streamlit secrets. "
-            "Set it under **Settings → Secrets** in Streamlit Cloud."
-        )
-        return
-
-    st.sidebar.markdown("### Login")
-    pwd = st.sidebar.text_input("Password", type="password")
-    if pwd == "":
-        st.stop()
-    if pwd != correct_password:
-        st.sidebar.error("Incorrect password.")
-        st.stop()
+# Light / corporate default colors are controlled mainly by Streamlit theme
+# in .streamlit/config.toml on your repo, not here. This app assumes your
+# config.toml uses a light theme.
 
 
 # =========================================================
 # HELPERS
 # =========================================================
-def load_uploaded_data(uploaded_files):
-    """Load CSV/XLSX files into a single DataFrame."""
-    if not uploaded_files:
+@st.cache_data
+def load_file(uploaded_file: io.BytesIO) -> pd.DataFrame:
+    """Load CSV or Excel into a DataFrame."""
+    if uploaded_file is None:
         return pd.DataFrame()
 
-    frames = []
-    for f in uploaded_files:
-        name = f.name.lower()
-        try:
-            if name.endswith(".csv"):
-                df = pd.read_csv(f)
-                frames.append(df)
-            elif name.endswith(".xlsx") or name.endswith(".xls"):
-                try:
-                    # requires openpyxl; make sure it's in requirements.txt
-                    xls = pd.ExcelFile(f, engine="openpyxl")
-                except Exception as e:
-                    st.error(
-                        f"Error reading file {f.name}: {e}. "
-                        "Make sure `openpyxl` is listed in requirements.txt."
-                    )
-                    continue
+    name = uploaded_file.name.lower()
 
-                for sheet in xls.sheet_names:
-                    df = xls.parse(sheet)
-                    frames.append(df)
-        except Exception as e:
-            st.error(f"Error reading file {f.name}: {e}")
-
-    if not frames:
+    try:
+        if name.endswith(".csv"):
+            return pd.read_csv(uploaded_file)
+        elif name.endswith(".xlsx") or name.endswith(".xls"):
+            # Requires openpyxl in requirements.txt
+            try:
+                return pd.read_excel(uploaded_file, engine="openpyxl")
+            except ImportError:
+                st.error(
+                    "Missing optional dependency `openpyxl` for Excel files.\n\n"
+                    "Add this line to your `requirements.txt` on GitHub:\n\n"
+                    "`openpyxl`"
+                )
+                return pd.DataFrame()
+        else:
+            st.error("Unsupported file type. Please upload CSV or XLSX.")
+            return pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error reading file **{uploaded_file.name}**: {e}")
         return pd.DataFrame()
 
-    return pd.concat(frames, ignore_index=True)
 
+def prepare_data(df: pd.DataFrame,
+                 revenue_col: str,
+                 cost_col: str,
+                 date_col: str,
+                 product_col: str) -> pd.DataFrame:
+    """
+    Standardize columns and compute revenue / cost / profit.
 
-def prepare_data(df, revenue_col, cost_col, date_col, product_col):
-    """Standardize columns and compute revenue / cost / profit."""
+    Validates that each mapping (revenue, cost, date, product) is a different
+    column to avoid duplicate names like '__revenue__'.
+    """
+
+    # --- Validate mapping: all roles must be different columns ---
+    mapping = {
+        "Revenue": revenue_col,
+        "Cost": cost_col,
+        "Date": date_col,
+        "Product": product_col,
+    }
+    if len(set(mapping.values())) < 4:
+        msg = (
+            "Each mapping (**Revenue**, **Cost**, **Date**, **Product**) "
+            "must point to a **different column**.\n\n"
+            "Current selection:\n"
+            f"- Revenue → `{revenue_col}`\n"
+            f"- Cost → `{cost_col}`\n"
+            f"- Date → `{date_col}`\n"
+            f"- Product → `{product_col}`\n\n"
+            "Please choose four different columns in the mapping section above."
+        )
+        st.error(msg)
+        st.stop()
+
     df = df.copy()
 
+    # Rename to internal names used everywhere else
     df.rename(
         columns={
             revenue_col: "__revenue__",
@@ -158,695 +99,409 @@ def prepare_data(df, revenue_col, cost_col, date_col, product_col):
         inplace=True,
     )
 
+    # Ensure numeric
     df["__revenue__"] = pd.to_numeric(df["__revenue__"], errors="coerce").fillna(0.0)
     df["__cost__"] = pd.to_numeric(df["__cost__"], errors="coerce").fillna(0.0)
 
+    # Parse dates
     df["__date__"] = pd.to_datetime(df["__date__"], errors="coerce")
     df = df[~df["__date__"].isna()]
 
+    # Profit
     df["__profit__"] = df["__revenue__"] - df["__cost__"]
+
+    # Month-year helper
+    df["month"] = df["__date__"].dt.to_period("M").dt.to_timestamp()
 
     return df
 
 
-def build_product_summary(df):
-    if "product" not in df.columns:
+def build_monthly_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
         return pd.DataFrame()
 
-    grp = (
-        df.groupby("product", as_index=False)[["__revenue__", "__cost__", "__profit__"]]
+    ms = (
+        df.groupby("month")[["__revenue__", "__cost__", "__profit__"]]
         .sum()
+        .reset_index()
+        .rename(
+            columns={
+                "month": "Month",
+                "__revenue__": "Revenue",
+                "__cost__": "Cost",
+                "__profit__": "Profit",
+            }
+        )
     )
-    grp["Margin %"] = np.where(
-        grp["__revenue__"] != 0,
-        grp["__profit__"] / grp["__revenue__"] * 100,
-        np.nan,
+    ms["Margin %"] = np.where(
+        ms["Revenue"] != 0,
+        ms["Profit"] / ms["Revenue"] * 100,
+        0.0,
     )
-    return grp.sort_values("__profit__", ascending=False)
+    return ms
 
 
-def build_monthly_summary(df):
-    temp = df.copy()
-    temp["Month"] = temp["__date__"].dt.to_period("M").dt.to_timestamp()
-    grp = (
-        temp.groupby("Month", as_index=False)[["__revenue__", "__cost__", "__profit__"]]
+def build_product_summary(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+
+    ps = (
+        df.groupby("product")[["__revenue__", "__cost__", "__profit__"]]
         .sum()
-    )
-    grp["Margin %"] = np.where(
-        grp["__revenue__"] != 0,
-        grp["__profit__"] / grp["__revenue__"] * 100,
-        np.nan,
-    )
-    return grp.sort_values("Month")
-
-
-def build_insights_and_exec(df, monthly_summary, product_summary):
-    """Generate Insights bullets + Executive Summary (clean formatting!)."""
-    insights = []
-    exec_parts = []
-
-    # 1) Most profitable product
-    if product_summary is not None and not product_summary.empty:
-        top = product_summary.iloc[0]
-        top_product = top["product"]
-        top_profit = top["__profit__"]
-        top_margin = top["Margin %"]
-
-        insights.append(
-            f"**{top_product}** is your most profitable product with profit of "
-            f"**${top_profit:,.0f}** and a margin of **{top_margin:.1f}%**."
+        .reset_index()
+        .rename(
+            columns={
+                "product": "Product",
+                "__revenue__": "Revenue",
+                "__cost__": "Cost",
+                "__profit__": "Profit",
+            }
         )
-
-        exec_parts.append(
-            f"{top_product} is currently your top performer, delivering "
-            f"**${top_profit:,.0f}** in profit with a margin of **{top_margin:.1f}%**."
-        )
-
-    # 2) Monthly performance / MoM / YoY / trend
-    if monthly_summary is not None and not monthly_summary.empty:
-        ms = monthly_summary.sort_values("Month").copy()
-        latest = ms.iloc[-1]
-        latest_month = latest["Month"]
-        latest_rev = latest["__revenue__"]
-        latest_prof = latest["__profit__"]
-
-        insights.append(
-            f"In the latest month (**{latest_month:%B %Y}**), you generated "
-            f"**${latest_rev:,.0f}** in revenue and **${latest_prof:,.0f}** in profit."
-        )
-
-        # Month-over-month
-        mom_rev = np.nan
-        if len(ms) >= 2:
-            prev = ms.iloc[-2]
-            base = prev["__revenue__"]
-            if base != 0:
-                mom_rev = (latest_rev - base) / base * 100
-
-        if not np.isnan(mom_rev):
-            direction = "up" if mom_rev >= 0 else "down"
-            insights.append(
-                f"Month-over-month, revenue is **{mom_rev:+.1f}%** "
-                f"({direction} vs. the prior month)."
-            )
-
-        # Year-over-year (if we have at least 13 months)
-        yoy_rev = np.nan
-        if len(ms) >= 13:
-            target_period = (latest_month - pd.DateOffset(years=1)).to_period("M")
-            ms["Period"] = ms["Month"].dt.to_period("M")
-            match = ms[ms["Period"] == target_period]
-            if not match.empty:
-                last_year_rev = match.iloc[-1]["__revenue__"]
-                if last_year_rev != 0:
-                    yoy_rev = (latest_rev - last_year_rev) / last_year_rev * 100
-
-        if not np.isnan(yoy_rev):
-            direction = "up" if yoy_rev >= 0 else "down"
-            insights.append(
-                f"Year-over-year, revenue for {latest_month:%B} is "
-                f"**{yoy_rev:+.1f}%** ({direction})."
-            )
-
-        # Trend last 3 months
-        trend_phrase = ""
-        if len(ms) >= 3:
-            last3 = ms.iloc[-3:]
-            revs = last3["__revenue__"].values
-            if all(np.diff(revs) > 0):
-                trend_phrase = "up"
-            elif all(np.diff(revs) < 0):
-                trend_phrase = "down"
-            else:
-                trend_phrase = "mixed"
-
-        if trend_phrase:
-            insights.append(
-                f"Revenue has been trending **{trend_phrase}** over the last three months."
-            )
-
-        exec_parts.append(
-            f"In {latest_month:%B %Y}, you generated "
-            f"**${latest_rev:,.0f}** in revenue and **${latest_prof:,.0f}** in profit."
-        )
-        if not np.isnan(yoy_rev):
-            exec_parts.append(
-                f"Compared with the same month last year, revenue is "
-                f"**{yoy_rev:+.1f}%**."
-            )
-        if trend_phrase:
-            exec_parts.append(
-                f"Revenue has been trending **{trend_phrase}** over the last three months."
-            )
-
-    exec_summary = " ".join(exec_parts) if exec_parts else "No data available yet."
-    return insights, exec_summary
-
-
-def build_simple_forecast(monthly_summary, periods=6):
-    """Simple linear regression forecast over monthly revenue."""
-    if monthly_summary is None or monthly_summary.empty:
-        return pd.DataFrame()
-
-    ms = monthly_summary.sort_values("Month").copy()
-    ms = ms.dropna(subset=["__revenue__"])
-    if len(ms) < 3:
-        return pd.DataFrame()
-
-    x = np.arange(len(ms))
-    y = ms["__revenue__"].values
-    m, b = np.polyfit(x, y, 1)
-
-    future_idx = np.arange(len(ms), len(ms) + periods)
-    future_y = m * future_idx + b
-
-    last_month = ms["Month"].iloc[-1]
-    future_months = [last_month + pd.DateOffset(months=i + 1) for i in range(periods)]
-
-    df_actual = pd.DataFrame(
-        {"Month": ms["Month"], "Revenue": y, "Type": "Actual"}
     )
-    df_forecast = pd.DataFrame(
-        {"Month": future_months, "Revenue": future_y, "Type": "Forecast"}
+    ps["Margin %"] = np.where(
+        ps["Revenue"] != 0,
+        ps["Profit"] / ps["Revenue"] * 100,
+        0.0,
     )
+    ps = ps.sort_values("Profit", ascending=False)
+    return ps
 
-    return pd.concat([df_actual, df_forecast], ignore_index=True)
+
+def describe_trend(series: pd.Series) -> str:
+    if len(series) < 3:
+        return "flat"
+
+    last3 = series.tail(3)
+    x = np.arange(len(last3))
+    coef = np.polyfit(x, last3.values, 1)[0]
+
+    if coef > 0:
+        return "up"
+    elif coef < 0:
+        return "down"
+    return "flat"
 
 
-def generate_ai_narrative(df, monthly_summary, product_summary):
-    """Optional AI narrative using OpenAI (only if ENABLE_AI_INSIGHTS)."""
+# =========================================================
+# SIDEBAR: LOGO + FILE UPLOAD + PAGE NAV
+# =========================================================
+with st.sidebar:
+    # Logo if logo.png exists
     try:
-        from openai import OpenAI
+        st.image("logo.png", use_column_width=True)
     except Exception:
-        return (
-            "AI insights are enabled, but the `openai` package is not installed. "
-            "Add `openai` to requirements.txt to use this feature."
-        )
+        st.markdown("### Analytics by Jalal")
 
-    api_key = st.secrets.get("OPENAI_API_KEY", "") or os.getenv("OPENAI_API_KEY", "")
-    if not api_key:
-        return (
-            "AI insights are enabled, but no OpenAI API key is configured. "
-            "Add `OPENAI_API_KEY` to your Streamlit secrets or environment."
-        )
-
-    client = OpenAI(api_key=api_key)
-
-    # Build a compact data summary for the prompt
-    basic_metrics = {
-        "total_revenue": float(df['__revenue__'].sum()),
-        "total_profit": float(df['__profit__'].sum()),
-        "num_rows": int(len(df)),
-    }
-
-    prompt = (
-        "You are a senior FP&A analyst. Based on the following metrics, "
-        "produce a concise narrative with strategy recommendations, risks and opportunities.\n\n"
-        f"Basic metrics: {basic_metrics}\n\n"
-        "Write 2–3 short paragraphs, plain text, no bullet points."
+    st.markdown("### Navigation")
+    page = st.radio(
+        "",
+        ["Dashboard", "Raw Data", "Settings / Info"],
+        index=0,
     )
 
-    try:
-        resp = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": "You are a helpful financial analyst."},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=0.4,
-        )
-        return resp.choices[0].message.content
-    except Exception as e:
-        return f"Error calling OpenAI: {e}"
-
-
-def download_product_summary_csv(product_summary):
-    csv_buf = io.StringIO()
-    product_summary.to_csv(csv_buf, index=False)
-    return csv_buf.getvalue().encode("utf-8")
-
-
-def download_full_excel_report(df, monthly_summary, product_summary):
-    excel_buf = io.BytesIO()
-    with pd.ExcelWriter(excel_buf, engine="xlsxwriter") as writer:
-        df.to_excel(writer, index=False, sheet_name="Raw Data")
-        monthly_summary.to_excel(writer, index=False, sheet_name="Monthly Summary")
-        product_summary.to_excel(writer, index=False, sheet_name="Product Summary")
-    excel_buf.seek(0)
-    return excel_buf
-
+    st.markdown("---")
+    st.markdown("### Upload your data")
+    uploaded_files = st.file_uploader(
+        "Upload one or more CSV/XLSX files",
+        type=["csv", "xlsx", "xls"],
+        accept_multiple_files=True,
+    )
 
 # =========================================================
-# SIDEBAR + AUTH
+# LOAD + COMBINE RAW DATA
 # =========================================================
-if ENABLE_AUTH:
-    check_auth()
+if uploaded_files:
+    dfs = []
+    for f in uploaded_files:
+        df_part = load_file(f)
+        if not df_part.empty:
+            df_part["__source_file__"] = f.name
+            dfs.append(df_part)
 
-# Logo
-try:
-    st.sidebar.image("logo.png", use_column_width=True)
-except Exception:
-    st.sidebar.markdown("### Analytics By Jalal")
-
-st.sidebar.markdown("---")
-
-nav_pages = [
-    "Overview",
-    "Forecasting",
-    "Product Performance",
-    "Profitability",
-    "Region / Customer",
-    "Raw Data",
-    "Settings / Info",
-]
-page = st.sidebar.radio("Navigation", nav_pages)
-
-st.sidebar.markdown("### Upload your data")
-uploaded_files = st.sidebar.file_uploader(
-    "CSV or Excel",
-    type=["csv", "xlsx", "xls"],
-    accept_multiple_files=True,
-)
+    if dfs:
+        df_raw = pd.concat(dfs, ignore_index=True)
+    else:
+        df_raw = pd.DataFrame()
+else:
+    df_raw = pd.DataFrame()
 
 # =========================================================
-# LOAD DATA
+# DASHBOARD PAGE
 # =========================================================
-df_raw = load_uploaded_data(uploaded_files)
-
-if df_raw.empty:
+if page == "Dashboard":
     st.title("Business Profit Dashboard")
     st.write(
-        "Upload one or more **CSV/XLSX** files in the sidebar to get started. "
-        "You’ll then map your revenue, cost, date, and product columns."
+        "Upload one or more CSV/XLSX files in the sidebar, then map your "
+        "revenue, cost, date, and product columns."
     )
-    st.stop()
 
-# =========================================================
-# COLUMN MAPPING
-# =========================================================
-st.markdown("### Column Mapping")
+    if df_raw.empty:
+        st.info("Upload at least one file to get started.")
+        st.stop()
 
-cols = df_raw.columns.tolist()
+    st.markdown("### Column Mapping")
 
-c1, c2, c3, c4 = st.columns(4)
-with c1:
-    revenue_col = st.selectbox("Revenue column", cols, index=0)
-with c2:
-    cost_col = st.selectbox("Cost column", cols, index=min(1, len(cols) - 1))
-with c3:
-    date_col = st.selectbox("Date column", cols, index=min(2, len(cols) - 1))
-with c4:
-    product_col = st.selectbox("Product column", cols, index=min(3, len(cols) - 1))
+    columns = list(df_raw.columns)
 
-df = prepare_data(df_raw, revenue_col, cost_col, date_col, product_col)
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        revenue_col = st.selectbox("Revenue column", options=columns, index=0)
+    with col2:
+        cost_col = st.selectbox("Cost column", options=columns, index=min(1, len(columns) - 1))
+    with col3:
+        date_col = st.selectbox("Date column", options=columns, index=min(2, len(columns) - 1))
+    with col4:
+        product_col = st.selectbox("Product column", options=columns, index=min(3, len(columns) - 1))
 
-# Optional region/customer detection
-region_candidates = ["region", "Region", "REGION", "area", "Area"]
-customer_candidates = ["customer", "Customer", "CUSTOMER", "client", "Client"]
+    df = prepare_data(df_raw, revenue_col, cost_col, date_col, product_col)
+    if df.empty:
+        st.warning("No valid rows after cleaning.")
+        st.stop()
 
-region_col = next((c for c in df_raw.columns if c in region_candidates), None)
-customer_col = next((c for c in df_raw.columns if c in customer_candidates), None)
-
-if region_col and region_col not in df.columns:
-    df[region_col] = df_raw[region_col]
-if customer_col and customer_col not in df.columns:
-    df[customer_col] = df_raw[customer_col]
-
-# =========================================================
-# FILTERS
-# =========================================================
-product_options = sorted(df["product"].dropna().unique()) if "product" in df.columns else []
-date_min = df["__date__"].min()
-date_max = df["__date__"].max()
-
-selected_region_values = None
-selected_customer_values = None
-
-if ENABLE_ADVANCED_FILTERS:
+    # =====================================================
+    # FILTERS
+    # =====================================================
     st.markdown("### Filters")
-    fc1, fc2, fc3 = st.columns([2, 2, 2])
-    with fc1:
+
+    product_options = sorted(df["product"].astype(str).unique())
+    min_date = df["__date__"].min()
+    max_date = df["__date__"].max()
+
+    col_f1, col_f2 = st.columns(2)
+    with col_f1:
         selected_products = st.multiselect(
             "Products",
             options=product_options,
             default=product_options,
         )
-    with fc2:
-        selected_range = st.date_input(
+    with col_f2:
+        date_range = st.date_input(
             "Date range",
-            value=(date_min.date(), date_max.date()),
+            value=(min_date.date(), max_date.date()),
+            min_value=min_date.date(),
+            max_value=max_date.date(),
         )
-    with fc3:
-        if region_col:
-            selected_region_values = st.multiselect(
-                "Region",
-                options=sorted(df[region_col].dropna().unique()),
-                default=sorted(df[region_col].dropna().unique()),
-            )
 
     if selected_products:
         df = df[df["product"].isin(selected_products)]
-    if isinstance(selected_range, (list, tuple)) and len(selected_range) == 2:
-        start, end = selected_range
-        df = df[(df["__date__"] >= pd.to_datetime(start)) & (df["__date__"] <= pd.to_datetime(end))]
-    if region_col and selected_region_values:
-        df = df[df[region_col].isin(selected_region_values)]
 
-    if customer_col:
-        selected_customer_values = st.multiselect(
-            "Customer",
-            options=sorted(df[customer_col].dropna().unique()),
-            default=sorted(df[customer_col].dropna().unique()),
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        start_date = pd.to_datetime(date_range[0])
+        end_date = pd.to_datetime(date_range[1]) + pd.Timedelta(days=1) - pd.Timedelta(
+            seconds=1
         )
-        if selected_customer_values:
-            df = df[df[customer_col].isin(selected_customer_values)]
+        df = df[(df["__date__"] >= start_date) & (df["__date__"] <= end_date)]
 
-if df.empty:
-    st.warning("Your current filter selection returns no rows. Adjust filters to see data.")
-    st.stop()
+    if df.empty:
+        st.warning("No data after applying filters.")
+        st.stop()
 
-# =========================================================
-# SUMMARIES
-# =========================================================
-monthly_summary = build_monthly_summary(df)
-product_summary = build_product_summary(df)
+    # =====================================================
+    # SUMMARIES
+    # =====================================================
+    monthly_summary = build_monthly_summary(df)
+    product_summary = build_product_summary(df)
 
-total_revenue = df["__revenue__"].sum()
-total_cost = df["__cost__"].sum()
-total_profit = df["__profit__"].sum()
-overall_margin = (total_profit / total_revenue * 100) if total_revenue != 0 else np.nan
+    total_revenue = df["__revenue__"].sum()
+    total_cost = df["__cost__"].sum()
+    total_profit = df["__profit__"].sum()
+    margin_pct = total_profit / total_revenue * 100 if total_revenue != 0 else 0.0
 
-insights, exec_summary = build_insights_and_exec(df, monthly_summary, product_summary)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Revenue", f"${total_revenue:,.0f}")
+    c2.metric("Total Cost", f"${total_cost:,.0f}")
+    c3.metric("Total Profit", f"${total_profit:,.0f}")
+    c4.metric("Profit Margin", f"{margin_pct:,.1f}%")
 
-# =========================================================
-# PAGE CONTENT
-# =========================================================
+    # =====================================================
+    # CHARTS
+    # =====================================================
+    st.markdown("### Revenue & Profit Over Time")
 
-# --------------- OVERVIEW (main dashboard) ----------------
-if page == "Overview":
-    st.title("Business Profit Dashboard – Overview")
-
-    # Key metrics
-    st.markdown("#### Key Metrics")
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-              <div class="metric-label">Total Revenue</div>
-              <div class="metric-value">${total_revenue:,.0f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with k2:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-              <div class="metric-label">Total Cost</div>
-              <div class="metric-value">${total_cost:,.0f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with k3:
-        st.markdown(
-            f"""
-            <div class="metric-card">
-              <div class="metric-label">Total Profit</div>
-              <div class="metric-value">${total_profit:,.0f}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    with k4:
-        margin_text = "N/A" if np.isnan(overall_margin) else f"{overall_margin:.1f}%"
-        st.markdown(
-            f"""
-            <div class="metric-card">
-              <div class="metric-label">Overall Margin</div>
-              <div class="metric-value">{margin_text}</div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-    st.markdown("---")
-
-    # Charts
-    st.markdown("#### Revenue & Profit Over Time")
     if not monthly_summary.empty:
-        fig_time = px.line(
-            monthly_summary,
+        line_df = monthly_summary.sort_values("Month")
+        fig = px.line(
+            line_df,
             x="Month",
-            y=["__revenue__", "__profit__"],
-            labels={"value": "Amount", "Month": "Month", "variable": "Metric"},
-            title="Monthly Revenue & Profit",
+            y=["Revenue", "Profit"],
+            labels={"value": "Amount", "variable": "Metric"},
         )
-        fig_time.update_layout(legend_title_text="")
-        st.plotly_chart(fig_time, use_container_width=True)
-    else:
-        st.info("Not enough data to plot monthly trend yet.")
+        fig.update_layout(legend_title_text="")
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.markdown("#### Top Products by Profit")
+    # Product table
+    st.markdown("### Top Products by Profit")
     if not product_summary.empty:
-        fig_prod = px.bar(
-            product_summary.head(15),
-            x="product",
-            y="__profit__",
-            title="Top Products by Profit",
-            labels={"__profit__": "Profit", "product": "Product"},
+        st.dataframe(
+            product_summary.style.format(
+                {
+                    "Revenue": "${:,.0f}",
+                    "Cost": "${:,.0f}",
+                    "Profit": "${:,.0f}",
+                    "Margin %": "{:,.1f}%",
+                }
+            ),
+            use_container_width=True,
         )
-        st.plotly_chart(fig_prod, use_container_width=True)
-    else:
-        st.info("No product breakdown available yet.")
 
-    # Insights & Executive summary
+    # =====================================================
+    # INSIGHTS
+    # =====================================================
     st.markdown("---")
-    c_left, c_right = st.columns([1.2, 1])
-    with c_left:
-        st.subheader("💡 Insights")
-        if insights:
-            for bullet in insights:
-                st.markdown(f"- {bullet}")
-        else:
-            st.write("Insights will appear here once there is enough data.")
-    with c_right:
-        st.subheader("📝 Executive Summary")
-        st.write(exec_summary)
+    st.subheader("💡 Insights")
 
-        if ENABLE_AI_INSIGHTS:
-            if st.button("Generate AI Insights (Experimental)"):
-                ai_text = generate_ai_narrative(df, monthly_summary, product_summary)
-                st.markdown("---")
-                st.markdown(ai_text)
+    insights = []
 
-    # Export section
-    st.markdown("---")
-    st.subheader("⬇️ Export Reports")
-
+    # 1) Most profitable product
     if not product_summary.empty:
-        csv_data = download_product_summary_csv(product_summary)
-        st.download_button(
-            "Download product summary (CSV)",
-            data=csv_data,
-            file_name="product_summary.csv",
-            mime="text/csv",
-        )
-    else:
-        st.caption("Product summary export will be available once there is product data.")
-
-    if not df.empty and not monthly_summary.empty and not product_summary.empty:
-        excel_buf = download_full_excel_report(df, monthly_summary, product_summary)
-        st.download_button(
-            "Download full Excel report",
-            data=excel_buf,
-            file_name="profit_dashboard_report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
-    else:
-        st.caption("Full Excel report will be available once there is enough data.")
-
-    if ENABLE_PDF_EXPORT:
-        st.caption(
-            "PDF export placeholder: when you're ready, we can plug in `fpdf2` or a similar "
-            "library to generate branded PDF reports with logo, tables, and charts."
+        top_prod = product_summary.iloc[0]
+        insights.append(
+            f"{top_prod['Product']} is your most profitable product with "
+            f"profit of **${top_prod['Profit']:,.0f}** and a margin of "
+            f"**{top_prod['Margin %']:,.1f}%**."
         )
 
-# --------------- FORECASTING ----------------
-elif page == "Forecasting":
-    st.title("📈 Forecasting")
+    # 2) Latest month performance
+    if not monthly_summary.empty:
+        ms_sorted = monthly_summary.sort_values("Month")
+        latest = ms_sorted.iloc[-1]
 
-    if not ENABLE_FORECASTING:
-        st.info("Forecasting is currently disabled. Set ENABLE_FORECASTING = True.")
-    else:
-        if monthly_summary.empty:
-            st.warning("Not enough data to build a forecast yet.")
-        else:
-            st.markdown(
-                "This is a simple linear regression forecast over monthly **revenue**. "
-                "We can later upgrade this to Prophet / ARIMA for richer seasonality."
-            )
-            forecast_df = build_simple_forecast(monthly_summary, periods=6)
-            if forecast_df.empty:
-                st.warning("Need at least 3 months of data for a forecast.")
-            else:
-                fig_fc = px.line(
-                    forecast_df,
-                    x="Month",
-                    y="Revenue",
-                    color="Type",
-                    title="6-Month Revenue Forecast (Simple Regression)",
-                    labels={"Revenue": "Revenue", "Month": "Month"},
+        latest_month_label = latest["Month"].strftime("%B %Y")
+        latest_revenue = latest["Revenue"]
+        latest_profit = latest["Profit"]
+
+        latest_line = (
+            f"In the latest month (**{latest_month_label}**), you generated "
+            f"**${latest_revenue:,.0f} in revenue** and "
+            f"**${latest_profit:,.0f} in profit**."
+        )
+        insights.append(latest_line)
+
+        # Month-over-month
+        if len(ms_sorted) > 1:
+            prev = ms_sorted.iloc[-2]
+            prev_rev = prev["Revenue"]
+            if prev_rev != 0:
+                mom_change = (latest_revenue - prev_rev) / prev_rev * 100
+                direction = "up" if mom_change > 0 else "down"
+                insights.append(
+                    f"Month-over-month, revenue is **{mom_change:,.1f}%** ({direction} vs. the prior month)."
                 )
-                st.plotly_chart(fig_fc, use_container_width=True)
 
-                st.markdown("#### Forecast Data")
-                st.dataframe(forecast_df)
+        # Year-over-year
+        this_month = latest["Month"].month
+        this_year = latest["Month"].year
+        same_month_last_year = ms_sorted[
+            (ms_sorted["Month"].dt.month == this_month)
+            & (ms_sorted["Month"].dt.year == this_year - 1)
+        ]
+        if not same_month_last_year.empty:
+            last_year_rev = same_month_last_year.iloc[0]["Revenue"]
+            if last_year_rev != 0:
+                yoy_change = (latest_revenue - last_year_rev) / last_year_rev * 100
+                direction = "up" if yoy_change > 0 else "down"
+                insights.append(
+                    f"Year-over-year, revenue for {latest_month_label} is **{yoy_change:,.1f}%** ({direction})."
+                )
 
-# --------------- PRODUCT PERFORMANCE ----------------
-elif page == "Product Performance":
-    st.title("🏷️ Product Performance")
-
-    if product_summary.empty:
-        st.info("No product summary yet.")
-    else:
-        st.markdown("### Profit by Product")
-        st.dataframe(product_summary)
-
-        fig_prod = px.bar(
-            product_summary,
-            x="product",
-            y="__profit__",
-            title="Profit by Product",
-            labels={"__profit__": "Profit", "product": "Product"},
-        )
-        st.plotly_chart(fig_prod, use_container_width=True)
-
-# --------------- PROFITABILITY ----------------
-elif page == "Profitability":
-    st.title("💵 Profitability")
-
-    if monthly_summary.empty:
-        st.info("No monthly summary yet.")
-    else:
-        st.markdown("### Monthly Margin %")
-        ms = monthly_summary.copy()
-        fig_margin = px.line(
-            ms,
-            x="Month",
-            y="Margin %",
-            title="Monthly Profit Margin %",
-            labels={"Margin %": "Margin %", "Month": "Month"},
-        )
-        st.plotly_chart(fig_margin, use_container_width=True)
-
-        st.markdown("### Monthly Profit Table")
-        st.dataframe(ms[["Month", "__revenue__", "__cost__", "__profit__", "Margin %"]])
-
-# --------------- REGION / CUSTOMER ----------------
-elif page == "Region / Customer":
-    st.title("🌍 Region / Customer Insights")
-
-    if not region_col and not customer_col:
-        st.info(
-            "No region or customer columns were detected. "
-            "If your data has them, name the columns something like "
-            "`Region`/`region` or `Customer`/`customer`."
-        )
-    else:
-        if region_col:
-            st.markdown(f"### Revenue by {region_col}")
-            reg_grp = (
-                df.groupby(region_col, as_index=False)[["__revenue__", "__profit__"]]
-                .sum()
+        # Trend last 3 months
+        if len(ms_sorted) >= 3:
+            trend = describe_trend(ms_sorted["Revenue"])
+            insights.append(
+                f"Revenue has been trending **{trend}** over the last three months."
             )
-            fig_reg = px.bar(
-                reg_grp,
-                x=region_col,
-                y="__revenue__",
-                title=f"Revenue by {region_col}",
-                labels={"__revenue__": "Revenue"},
-            )
-            st.plotly_chart(fig_reg, use_container_width=True)
-            st.dataframe(reg_grp)
 
-        if customer_col:
-            st.markdown(f"### Top Customers by Revenue ({customer_col})")
-            cust_grp = (
-                df.groupby(customer_col, as_index=False)[["__revenue__", "__profit__"]]
-                .sum()
-                .sort_values("__revenue__", ascending=False)
-                .head(50)
-            )
-            fig_cust = px.bar(
-                cust_grp,
-                x=customer_col,
-                y="__revenue__",
-                title="Top Customers by Revenue",
-                labels={"__revenue__": "Revenue"},
-            )
-            st.plotly_chart(fig_cust, use_container_width=True)
-            st.dataframe(cust_grp)
-
-# --------------- RAW DATA ----------------
-elif page == "Raw Data":
-    st.title("Raw Data Preview")
-    st.markdown("### Filtered Dataset")
-    st.dataframe(df.head(1000))
-
-    st.markdown("### Monthly Summary")
-    if not monthly_summary.empty:
-        st.dataframe(monthly_summary)
+    if not insights:
+        st.write("Insights will appear here once your data is mapped.")
     else:
-        st.info("No monthly summary yet.")
+        for bullet in insights:
+            st.markdown(f"- {bullet}")
 
-    st.markdown("### Product Summary")
+    # =====================================================
+    # EXECUTIVE SUMMARY
+    # =====================================================
+    st.markdown("---")
+    st.subheader("📝 Executive Summary")
+
+    summary_parts = []
+
     if not product_summary.empty:
-        st.dataframe(product_summary)
+        top_prod = product_summary.iloc[0]
+        summary_parts.append(
+            f"{top_prod['Product']} is currently your top performer, "
+            f"delivering **${top_prod['Profit']:,.0f} in profit** at a "
+            f"**{top_prod['Margin %']:,.1f}% margin**."
+        )
+
+    if not monthly_summary.empty:
+        ms_sorted = monthly_summary.sort_values("Month")
+        latest = ms_sorted.iloc[-1]
+        latest_month_label = latest["Month"].strftime("%B %Y")
+        summary_parts.append(
+            f"In {latest_month_label}, the business generated "
+            f"**${latest['Revenue']:,.0f} in revenue** and "
+            f"**${latest['Profit']:,.0f} in profit**."
+        )
+
+        if len(ms_sorted) >= 3:
+            trend = describe_trend(ms_sorted["Revenue"])
+            summary_parts.append(
+                f"Over the last three months, revenue has been trending **{trend}**."
+            )
+
+    if summary_parts:
+        st.write(" ".join(summary_parts))
     else:
-        st.info("No product summary yet.")
+        st.write("An executive summary will appear here once your data is mapped.")
 
-# --------------- SETTINGS / INFO ----------------
-else:
-    st.title("Settings & Info")
 
-    st.write(
+# =========================================================
+# RAW DATA PAGE
+# =========================================================
+elif page == "Raw Data":
+    st.title("Raw Data")
+
+    if df_raw.empty:
+        st.info("Upload at least one file to view raw data.")
+        st.stop()
+
+    st.write("Below is the combined raw data from all uploaded files.")
+    st.dataframe(df_raw, use_container_width=True)
+
+
+# =========================================================
+# SETTINGS / INFO PAGE
+# =========================================================
+else:  # page == "Settings / Info"
+    st.title("Settings / Info")
+
+    st.markdown("### What this app does")
+    st.markdown(
         """
-        ### What this app does
-
-        - Uploads CSV or Excel sales/profit data (supports multiple files & sheets).
-        - Lets you map revenue, cost, date, and product columns.
-        - Applies filters on product, date, and (optionally) region and customer.
-        - Shows KPIs, charts, and an Insights + Executive Summary section.
-        - Builds monthly and product-level summaries.
-        - Exports product summary (CSV) and a full Excel report.
+- Uploads CSV or Excel sales/profit data.
+- Lets you map revenue, cost, date, and product columns.
+- Applies filters (date & product).
+- Shows KPIs, charts, tables, insights, and an executive summary.
+- Supports basic forecasting upgrades, AI insights, and PDF export in future versions.
         """
     )
 
-    st.write(
+    st.markdown("### How to turn advanced features on later")
+    st.markdown(
         """
-        ### Advanced features we wired in
+In future upgrades we can add:
 
-        - **Authentication** (ENABLE_AUTH): password gate using `st.secrets["APP_PASSWORD"]`.
-        - **Forecasting** (ENABLE_FORECASTING): simple 6-month regression forecast now,
-          with room to upgrade to Prophet / ARIMA later.
-        - **AI Insights** (ENABLE_AI_INSIGHTS): uses OpenAI when `OPENAI_API_KEY` is set.
-        - **PDF Export** (ENABLE_PDF_EXPORT): placeholder for branded PDF reports.
-        - **Multi-page navigation**: Overview, Forecasting, Product Performance,
-          Profitability, Region/Customer, Raw Data, Settings/Info.
+1. **User authentication** (Streamlit-Authenticator / Supabase).
+2. **Forecasting** (linear regression, Prophet, ARIMA) with 3/6/12-month predictions.
+3. **AI insights** powered by ChatGPT inside the app.
+4. **More filters** (region, customer, etc.).
+5. **Downloadable PDF reports** with logo, charts, tables, and commentary.
+6. **Multi-page navigation** for Overview, Forecasting, Product Performance, etc.
+7. **Custom domain** like `dashboard.analyticsbyjalal.com`.
         """
     )
 
-    st.write(
-        """
-        ### Next steps
-
-        - Add a custom domain like `dashboard.analyticsbyjalal.com` via Streamlit Cloud.
-        - When you're ready, we can refine:
-          - Mobile responsiveness
-          - Dark mode toggle
-          - More advanced forecasting models
-          - Fully branded PDF templates
-        """
+    st.markdown(
+        "Right now you have a clean, working dashboard. When you're ready, "
+        "we can layer in any of the upgrades above."
     )
