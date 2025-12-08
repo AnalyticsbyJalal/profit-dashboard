@@ -9,7 +9,7 @@ from PIL import Image
 import streamlit as st
 
 # =========================================================
-# CONFIG
+# BASIC CONFIG
 # =========================================================
 st.set_page_config(
     page_title="Business Profit Dashboard",
@@ -17,48 +17,25 @@ st.set_page_config(
     layout="wide",
 )
 
-# Feature flags (optional, future use)
+# Optional feature flags (for future use)
 ENABLE_AUTH = False
 ENABLE_AI_INSIGHTS = False
 ENABLE_PDF_EXPORT = False
 
-# Session defaults
-if "filter_presets" not in st.session_state:
-    st.session_state.filter_presets = {}  # name -> dict of filters
-
-if "product_filter" not in st.session_state:
-    st.session_state.product_filter = None
-
-if "date_range" not in st.session_state:
-    st.session_state.date_range = None
-
+# =========================================================
+# SESSION DEFAULTS
+# =========================================================
+if "filter_presets_v2" not in st.session_state:
+    st.session_state.filter_presets_v2 = {}  # name -> {products, date_range}
 
 # =========================================================
 # HELPER FUNCTIONS
 # =========================================================
-def load_data(uploaded_file, sheet_name=None):
-    if uploaded_file is None:
-        return None
-
-    name = uploaded_file.name.lower()
-    if name.endswith(".csv"):
-        df = pd.read_csv(uploaded_file)
-    else:
-        # Excel
-        xls = pd.ExcelFile(uploaded_file)
-        if sheet_name is None:
-            # default: first sheet
-            sheet_name = xls.sheet_names[0]
-        df = xls.parse(sheet_name)
-
-    return df
-
-
 def map_columns(df, revenue_col, cost_col, date_col, product_col):
-    """Create normalized internal columns."""
+    """Create normalized internal columns from user-selected mapping."""
     df = df.copy()
 
-    # Coerce numeric
+    # Revenue & cost numeric
     if revenue_col:
         df["__revenue__"] = pd.to_numeric(df[revenue_col], errors="coerce")
     else:
@@ -90,11 +67,11 @@ def summarize_monthly(df):
     if df["__date__"].isna().all():
         return None
 
-    df = df.dropna(subset=["__date__"]).copy()
-    df["Month"] = df["__date__"].dt.to_period("M").dt.to_timestamp()
+    temp = df.dropna(subset=["__date__"]).copy()
+    temp["Month"] = temp["__date__"].dt.to_period("M").dt.to_timestamp()
 
     monthly = (
-        df.groupby("Month", as_index=False)[["__revenue__", "__cost__", "__profit__"]]
+        temp.groupby("Month", as_index=False)[["__revenue__", "__cost__", "__profit__"]]
         .sum()
         .sort_values("Month")
     )
@@ -104,22 +81,21 @@ def summarize_monthly(df):
         monthly["__profit__"] / monthly["__revenue__"] * 100,
         0.0,
     )
-
     return monthly
 
 
 def summarize_products(df):
-    product_summary = (
+    prod = (
         df.groupby("product", as_index=False)[["__revenue__", "__cost__", "__profit__"]]
         .sum()
         .sort_values("__profit__", ascending=False)
     )
-    product_summary["Margin %"] = np.where(
-        product_summary["__revenue__"] != 0,
-        product_summary["__profit__"] / product_summary["__revenue__"] * 100,
+    prod["Margin %"] = np.where(
+        prod["__revenue__"] != 0,
+        prod["__profit__"] / prod["__revenue__"] * 100,
         0.0,
     )
-    return product_summary
+    return prod
 
 
 def build_insights_and_exec(df, monthly_summary, product_summary):
@@ -134,50 +110,59 @@ def build_insights_and_exec(df, monthly_summary, product_summary):
         top_margin = top["Margin %"]
 
         insights.append(
-            f"**{top_product}** is your most profitable product "
-            f"with profit of **${top_profit:,.0f}** and a margin of **{top_margin:.1f}%**."
+            f"**{top_product}** is your most profitable product with profit of "
+            f"**${top_profit:,.0f}** and a margin of **{top_margin:.1f}%**."
         )
-
         exec_parts.append(
             f"{top_product} is currently your top performer, delivering "
             f"**${top_profit:,.0f} in profit** at a **{top_margin:.1f}% margin**."
         )
-    else:
-        top_product = None
 
-    # 2) Monthly performance / latest month
+    # 2) Monthly performance
     if monthly_summary is not None and not monthly_summary.empty:
-        ms = monthly_summary.sort_values("Month")
+        ms = monthly_summary.sort_values("Month").copy()
         latest = ms.iloc[-1]
         latest_month = latest["Month"]
         latest_rev = latest["__revenue__"]
         latest_prof = latest["__profit__"]
 
+        insights.append(
+            f"In the latest month (**{latest_month:%B %Y}**), you generated "
+            f"**${latest_rev:,.0f}** in revenue and **${latest_prof:,.0f}** in profit."
+        )
+
+        # MoM
+        mom_rev = np.nan
         if len(ms) >= 2:
             prev = ms.iloc[-2]
-            mom_rev = (
-                (latest_rev - prev["__revenue__"]) / prev["__revenue__"] * 100
-                if prev["__revenue__"] != 0
-                else np.nan
-            )
-        else:
-            mom_rev = np.nan
+            base = prev["__revenue__"]
+            if base != 0:
+                mom_rev = (latest_rev - base) / base * 100
 
-        # YoY: compare with same month last year if exists
+        if not np.isnan(mom_rev):
+            direction = "up" if mom_rev >= 0 else "down"
+            insights.append(
+                f"Month-over-month, revenue is **{mom_rev:+.1f}%** ({direction} vs. the prior month)."
+            )
+
+        # YoY (if we have at least 13 months)
         yoy_rev = np.nan
         if len(ms) >= 13:
-            target_month = (latest_month - pd.DateOffset(years=1)).to_period("M")
-            ms["MonthPeriod"] = ms["Month"].dt.to_period("M")
-            match = ms[ms["MonthPeriod"] == target_month]
+            target_period = (latest_month - pd.DateOffset(years=1)).to_period("M")
+            ms["Period"] = ms["Month"].dt.to_period("M")
+            match = ms[ms["Period"] == target_period]
             if not match.empty:
                 last_year_rev = match.iloc[-1]["__revenue__"]
-                yoy_rev = (
-                    (latest_rev - last_year_rev) / last_year_rev * 100
-                    if last_year_rev != 0
-                    else np.nan
-                )
+                if last_year_rev != 0:
+                    yoy_rev = (latest_rev - last_year_rev) / last_year_rev * 100
 
-        # Trend: last 3 months
+        if not np.isnan(yoy_rev):
+            direction = "up" if yoy_rev >= 0 else "down"
+            insights.append(
+                f"Year-over-year, revenue for {latest_month:%B} is **{yoy_rev:+.1f}%** ({direction})."
+            )
+
+        # Trend of last 3 months
         trend_phrase = ""
         if len(ms) >= 3:
             last3 = ms.iloc[-3:]
@@ -189,26 +174,6 @@ def build_insights_and_exec(df, monthly_summary, product_summary):
             else:
                 trend_phrase = "mixed"
 
-        # Insights text
-        insights.append(
-            f"In the latest month (**{latest_month:%B %Y}**), you generated "
-            f"**${latest_rev:,.0f}** in revenue and **${latest_prof:,.0f}** in profit."
-        )
-
-        if not np.isnan(mom_rev):
-            direction = "up" if mom_rev >= 0 else "down"
-            insights.append(
-                f"Month-over-month, revenue is **{mom_rev:+.1f}%** "
-                f"({direction} vs. the prior month)."
-            )
-
-        if not np.isnan(yoy_rev):
-            direction = "up" if yoy_rev >= 0 else "down"
-            insights.append(
-                f"Year-over-year, revenue is **{yoy_rev:+.1f}%** for "
-                f"{latest_month:%B}."
-            )
-
         if trend_phrase:
             insights.append(
                 f"Revenue has been trending **{trend_phrase}** over the last three months."
@@ -219,25 +184,20 @@ def build_insights_and_exec(df, monthly_summary, product_summary):
             f"In {latest_month:%B %Y}, you generated **${latest_rev:,.0f} in revenue** "
             f"and **${latest_prof:,.0f} in profit**."
         )
-
         if not np.isnan(yoy_rev):
             exec_parts.append(
-                f"Compared with the same month last year, revenue is "
-                f"**{yoy_rev:+.1f}%**."
+                f"Compared with the same month last year, revenue is **{yoy_rev:+.1f}%**."
             )
-
         if trend_phrase:
             exec_parts.append(
                 f"Revenue has been trending **{trend_phrase}** over the last three months."
             )
 
     exec_summary = " ".join(exec_parts) if exec_parts else "No data available yet."
-
     return insights, exec_summary
 
 
 def build_excel_download(df, monthly_summary, product_summary):
-    """Create an in-memory Excel file with multiple sheets."""
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name="Raw Data")
@@ -250,9 +210,8 @@ def build_excel_download(df, monthly_summary, product_summary):
 
 
 # =========================================================
-# LAYOUT – SIDEBAR: FILE & FILTERS
+# SIDEBAR: NAVIGATION + UPLOAD + MAPPING
 # =========================================================
-
 if os.path.exists("logo.png"):
     st.sidebar.image("logo.png", use_column_width=True)
 
@@ -268,17 +227,15 @@ uploaded_file = st.sidebar.file_uploader(
     "Upload CSV or Excel file", type=["csv", "xlsx", "xls"]
 )
 
-sheet_name = None
 df_raw = None
+sheet_name = None
 
 if uploaded_file is not None:
-    name = uploaded_file.name.lower()
-    if name.endswith((".xlsx", ".xls")):
+    filename = uploaded_file.name.lower()
+    if filename.endswith((".xlsx", ".xls")):
         xls = pd.ExcelFile(uploaded_file)
         if len(xls.sheet_names) > 1:
-            sheet_name = st.sidebar.selectbox(
-                "Select sheet", options=xls.sheet_names
-            )
+            sheet_name = st.sidebar.selectbox("Select sheet", xls.sheet_names)
         else:
             sheet_name = xls.sheet_names[0]
         df_raw = xls.parse(sheet_name)
@@ -288,25 +245,23 @@ if uploaded_file is not None:
 # Column mapping
 revenue_col = cost_col = date_col = product_col = None
 if df_raw is not None:
-    cols = list(df_raw.columns)
+    columns = list(df_raw.columns)
     st.sidebar.markdown("### Column Mapping")
     revenue_col = st.sidebar.selectbox(
-        "Revenue column", ["(none)"] + cols, index=0 if "revenue" not in ",".join(cols).lower() else cols.index("revenue")
+        "Revenue column", ["(none)"] + columns
     )
-    cost_col = st.sidebar.selectbox("Cost column (optional)", ["(none)"] + cols)
-    date_col = st.sidebar.selectbox("Date column (optional)", ["(none)"] + cols)
-    product_col = st.sidebar.selectbox("Product column (optional)", ["(none)"] + cols)
+    cost_col = st.sidebar.selectbox("Cost column (optional)", ["(none)"] + columns)
+    date_col = st.sidebar.selectbox("Date column (optional)", ["(none)"] + columns)
+    product_col = st.sidebar.selectbox("Product column (optional)", ["(none)"] + columns)
 
-    if revenue_col == "(none)":
-        revenue_col = None
-    if cost_col == "(none)":
-        cost_col = None
-    if date_col == "(none)":
-        date_col = None
-    if product_col == "(none)":
-        product_col = None
+    revenue_col = None if revenue_col == "(none)" else revenue_col
+    cost_col = None if cost_col == "(none)" else cost_col
+    date_col = None if date_col == "(none)" else date_col
+    product_col = None if product_col == "(none)" else product_col
 
-# Prepare main df
+# =========================================================
+# CREATE NORMALIZED DATAFRAME + FILTERS
+# =========================================================
 df = None
 monthly_summary = None
 product_summary = None
@@ -314,73 +269,75 @@ product_summary = None
 if df_raw is not None:
     df = map_columns(df_raw, revenue_col, cost_col, date_col, product_col)
 
-    # =======================
-    # FILTERS + PRESETS
-    # =======================
+    # ------------- FILTERS -------------
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Filters")
 
     # Product filter
-       # Build product options from the filtered data
     product_options = sorted(df["product"].dropna().unique().tolist())
 
-    # Get previous selection from session_state (if any)
-    prev_selection = st.session_state.get("product_filter")
+    # Init session state for product filter
+    if "product_filter_v2" not in st.session_state:
+        st.session_state.product_filter_v2 = product_options
 
-    if prev_selection is None:
-        # First run: select all products
-        default_selection = product_options
-    else:
-        # Keep only values that still exist in the current options
-        default_selection = [p for p in prev_selection if p in product_options]
-        # If nothing valid remains, fall back to "all"
-        if not default_selection:
-            default_selection = product_options
+    # Sanitize previous selection against current options
+    current_sel = [p for p in st.session_state.product_filter_v2 if p in product_options]
+    if not current_sel:
+        current_sel = product_options
+    st.session_state.product_filter_v2 = current_sel
 
     product_filter = st.sidebar.multiselect(
         "Products",
         options=product_options,
-        default=default_selection,
-        key="product_filter",
+        default=current_sel,
+        key="product_filter_v2",
     )
 
+    # Keep session state updated
+    st.session_state.product_filter_v2 = product_filter if product_filter else product_options
 
-    # Date range filter
+    # Date filter
     if not df["__date__"].isna().all():
         min_date = df["__date__"].min().date()
         max_date = df["__date__"].max().date()
 
-        if st.session_state.date_range is None:
-            st.session_state.date_range = (min_date, max_date)
+        if "date_range_v2" not in st.session_state:
+            st.session_state.date_range_v2 = (min_date, max_date)
+
+        # Sanitize stored range
+        start, end = st.session_state.date_range_v2
+        start = max(min_date, min(start, max_date))
+        end = max(min_date, min(end, max_date))
+        if start > end:
+            start, end = min_date, max_date
+        st.session_state.date_range_v2 = (start, end)
 
         date_range = st.sidebar.slider(
             "Date range",
             min_value=min_date,
             max_value=max_date,
-            value=st.session_state.date_range,
-            key="date_range",
+            value=st.session_state.date_range_v2,
+            key="date_range_v2",
         )
     else:
         date_range = None
 
-    # Apply the filters
-    if product_filter:
-        df = df[df["product"].isin(product_filter)]
+    # Apply filters to df
+    if st.session_state.product_filter_v2:
+        df = df[df["product"].isin(st.session_state.product_filter_v2)]
 
     if date_range and not df["__date__"].isna().all():
         start, end = date_range
         mask = (df["__date__"].dt.date >= start) & (df["__date__"].dt.date <= end)
         df = df[mask]
 
-    # =======================
-    # PRESET MANAGEMENT
-    # =======================
+    # ------------- PRESETS -------------
     st.sidebar.markdown("---")
     st.sidebar.markdown("### Filter Presets")
 
     preset_name = st.sidebar.text_input("Preset name")
-    existing_presets = list(st.session_state.filter_presets.keys())
-    preset_to_load = st.sidebar.selectbox(
+    existing_presets = list(st.session_state.filter_presets_v2.keys())
+    selected_preset = st.sidebar.selectbox(
         "Existing presets", ["(none)"] + existing_presets
     )
 
@@ -389,9 +346,9 @@ if df_raw is not None:
     with col_save:
         if st.button("Save", use_container_width=True):
             if preset_name.strip():
-                st.session_state.filter_presets[preset_name.strip()] = {
-                    "products": list(st.session_state.product_filter),
-                    "date_range": st.session_state.date_range,
+                st.session_state.filter_presets_v2[preset_name.strip()] = {
+                    "products": list(st.session_state.product_filter_v2),
+                    "date_range": st.session_state.get("date_range_v2"),
                 }
                 st.sidebar.success(f"Saved preset: {preset_name.strip()}")
             else:
@@ -399,45 +356,42 @@ if df_raw is not None:
 
     with col_load:
         if st.button("Load", use_container_width=True):
-            if preset_to_load != "(none)":
-                preset = st.session_state.filter_presets[preset_to_load]
-                st.session_state.product_filter = preset.get("products", product_options)
-                st.session_state.date_range = preset.get(
-                    "date_range",
-                    (min_date, max_date)
-                    if not df["__date__"].isna().all()
-                    else st.session_state.date_range,
-                )
-                st.sidebar.success(f"Loaded preset: {preset_to_load}")
+            if selected_preset != "(none)":
+                preset = st.session_state.filter_presets_v2[selected_preset]
+                if "products" in preset:
+                    st.session_state.product_filter_v2 = [
+                        p for p in preset["products"] if p in product_options
+                    ] or product_options
+                if "date_range" in preset and preset["date_range"] is not None:
+                    st.session_state.date_range_v2 = preset["date_range"]
+                st.sidebar.success(f"Loaded preset: {selected_preset}")
+                st.experimental_rerun()
             else:
                 st.sidebar.warning("Select a preset to load.")
 
     with col_delete:
         if st.button("Delete", use_container_width=True):
-            if preset_to_load != "(none)" and preset_to_load in st.session_state.filter_presets:
-                del st.session_state.filter_presets[preset_to_load]
-                st.sidebar.success(f"Deleted preset: {preset_to_load}")
+            if selected_preset != "(none)" and selected_preset in st.session_state.filter_presets_v2:
+                del st.session_state.filter_presets_v2[selected_preset]
+                st.sidebar.success(f"Deleted preset: {selected_preset}")
             else:
                 st.sidebar.warning("Select a preset to delete.")
 
-    # Recompute summaries after filters
+    # After filters & presets, compute summaries
     monthly_summary = summarize_monthly(df)
     product_summary = summarize_products(df)
 
-
 # =========================================================
-# MAIN PAGES
+# MAIN LAYOUT
 # =========================================================
-
 st.title("Business Profit Dashboard")
 
 if df is None:
-    st.info("Upload a CSV or Excel file and map your columns in the sidebar to begin.")
+    st.info("Upload a CSV or Excel file and map your columns in the sidebar to get started.")
 else:
-    # Build insights + executive summary once
     insights, exec_summary = build_insights_and_exec(df, monthly_summary, product_summary)
 
-    # ----------------- PAGE: DASHBOARD -----------------
+    # ---------------- DASHBOARD ----------------
     if page == "Dashboard":
         st.markdown("### Key Metrics")
 
@@ -454,7 +408,6 @@ else:
 
         st.markdown("---")
 
-        # Charts
         if monthly_summary is not None and not monthly_summary.empty:
             st.subheader("Revenue & Profit Over Time")
             fig = px.line(
@@ -472,7 +425,7 @@ else:
                 product_summary.head(15),
                 x="product",
                 y="__profit__",
-                labels={"__profit__": "Profit", "product": "Product"},
+                labels={"product": "Product", "__profit__": "Profit"},
             )
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -488,14 +441,12 @@ else:
         st.subheader("📝 Executive Summary")
         st.markdown(exec_summary)
 
-    # ----------------- PAGE: PRODUCT DETAILS -----------------
+    # ---------------- PRODUCT DETAILS ----------------
     elif page == "Product Details":
         st.subheader("Product Summary Table")
-
         if product_summary is None or product_summary.empty:
             st.write("No product data available.")
         else:
-            # Pretty column names
             display_df = product_summary.rename(
                 columns={
                     "product": "Product",
@@ -507,14 +458,12 @@ else:
             )
             st.dataframe(display_df, use_container_width=True)
 
-    # ----------------- PAGE: EXPORT REPORTS -----------------
+    # ---------------- EXPORT REPORTS ----------------
     elif page == "Export Reports":
         st.subheader("Export Reports")
-
         if df is None or df.empty:
             st.write("Upload and map data first.")
         else:
-            # Product CSV
             if product_summary is not None:
                 export_df = product_summary.rename(
                     columns={
@@ -533,7 +482,6 @@ else:
                     mime="text/csv",
                 )
 
-            # Full Excel
             excel_bytes = build_excel_download(df, monthly_summary, product_summary)
             st.download_button(
                 "Download full Excel report",
@@ -542,7 +490,7 @@ else:
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
 
-    # ----------------- PAGE: SETTINGS / INFO -----------------
+    # ---------------- SETTINGS / INFO ----------------
     elif page == "Settings / Info":
         st.markdown("---")
         st.subheader("Settings & Info")
@@ -555,7 +503,7 @@ else:
 - Lets you map revenue, cost, date, and product columns.
 - Applies filters (date & product) with **saved presets**.
 - Shows KPIs, charts, tables, insights, and an executive summary.
-- Builds a simple 6-month forecast based on trend (approximate).
+- Builds a simple 6-month trend-based view.
 - Supports optional authentication, AI Insights, and PDF export via flags.
 
 ### How to turn features on/off
@@ -578,5 +526,3 @@ ENABLE_PDF_EXPORT = False  # True to enable PDF download
             "Built by **AnalyticsbyJalal** · Use this as a demo app or a starting point "
             "for a client-facing analytics product."
         )
-
-
