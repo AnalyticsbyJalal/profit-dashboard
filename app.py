@@ -321,18 +321,29 @@ if df_raw is not None:
     st.sidebar.markdown("### Filters")
 
     # Product filter
+       # Build product options from the filtered data
     product_options = sorted(df["product"].dropna().unique().tolist())
-    default_products = product_options
 
-    if st.session_state.product_filter is None:
-        st.session_state.product_filter = default_products
+    # Get previous selection from session_state (if any)
+    prev_selection = st.session_state.get("product_filter")
+
+    if prev_selection is None:
+        # First run: select all products
+        default_selection = product_options
+    else:
+        # Keep only values that still exist in the current options
+        default_selection = [p for p in prev_selection if p in product_options]
+        # If nothing valid remains, fall back to "all"
+        if not default_selection:
+            default_selection = product_options
 
     product_filter = st.sidebar.multiselect(
         "Products",
         options=product_options,
-        default=st.session_state.product_filter,
+        default=default_selection,
         key="product_filter",
     )
+
 
     # Date range filter
     if not df["__date__"].isna().all():
@@ -567,4 +578,5 @@ ENABLE_PDF_EXPORT = False  # True to enable PDF download
             "Built by **AnalyticsbyJalal** · Use this as a demo app or a starting point "
             "for a client-facing analytics product."
         )
+
 
