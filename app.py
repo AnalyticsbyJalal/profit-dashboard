@@ -693,11 +693,15 @@ elif page == "Settings / Info":
 
 ### How to turn features on/off
 
-Edit the top of `app.py`:
+Edit the top of `app.py` and set these values:
 """
     )
-```python
-ENABLE_AUTH = False          # True to enable login
-ENABLE_AI_INSIGHTS = False   # True to enable OpenAI-based insights
-ENABLE_PDF_EXPORT = False    # True to enable PDF download
 
+    st.code(
+        '''
+ENABLE_AUTH = False        # True to enable login
+ENABLE_AI_INSIGHTS = False # True to enable OpenAI-based insights
+ENABLE_PDF_EXPORT = False  # True to enable PDF download
+        ''',
+        language="python"
+    )
