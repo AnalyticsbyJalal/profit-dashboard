@@ -17,7 +17,7 @@ st.set_page_config(
     layout="wide",
 )
 
-# Optional feature flags (for future use)
+# Optional feature flags (for future expansion)
 ENABLE_AUTH = False
 ENABLE_AI_INSIGHTS = False
 ENABLE_PDF_EXPORT = False
@@ -27,6 +27,7 @@ ENABLE_PDF_EXPORT = False
 # =========================================================
 if "filter_presets_v2" not in st.session_state:
     st.session_state.filter_presets_v2 = {}  # name -> {products, date_range}
+
 
 # =========================================================
 # HELPER FUNCTIONS
@@ -247,9 +248,7 @@ revenue_col = cost_col = date_col = product_col = None
 if df_raw is not None:
     columns = list(df_raw.columns)
     st.sidebar.markdown("### Column Mapping")
-    revenue_col = st.sidebar.selectbox(
-        "Revenue column", ["(none)"] + columns
-    )
+    revenue_col = st.sidebar.selectbox("Revenue column", ["(none)"] + columns)
     cost_col = st.sidebar.selectbox("Cost column (optional)", ["(none)"] + columns)
     date_col = st.sidebar.selectbox("Date column (optional)", ["(none)"] + columns)
     product_col = st.sidebar.selectbox("Product column (optional)", ["(none)"] + columns)
@@ -276,55 +275,46 @@ if df_raw is not None:
     # Product filter
     product_options = sorted(df["product"].dropna().unique().tolist())
 
-    # Init session state for product filter
-    if "product_filter_v2" not in st.session_state:
-        st.session_state.product_filter_v2 = product_options
-
-    # Sanitize previous selection against current options
-    current_sel = [p for p in st.session_state.product_filter_v2 if p in product_options]
-    if not current_sel:
-        current_sel = product_options
-    st.session_state.product_filter_v2 = current_sel
+    # Initialize previous selection (from session or default = all)
+    prev_products = st.session_state.get("product_filter_v2", product_options)
+    prev_products = [p for p in prev_products if p in product_options] or product_options
 
     product_filter = st.sidebar.multiselect(
         "Products",
         options=product_options,
-        default=current_sel,
+        default=prev_products,
         key="product_filter_v2",
     )
 
-    # Keep session state updated
-    st.session_state.product_filter_v2 = product_filter if product_filter else product_options
+    # Use widget value (safe): if empty selection, treat as "all"
+    effective_products = product_filter if product_filter else product_options
 
     # Date filter
     if not df["__date__"].isna().all():
         min_date = df["__date__"].min().date()
         max_date = df["__date__"].max().date()
 
-        if "date_range_v2" not in st.session_state:
-            st.session_state.date_range_v2 = (min_date, max_date)
-
-        # Sanitize stored range
-        start, end = st.session_state.date_range_v2
+        prev_range = st.session_state.get("date_range_v2", (min_date, max_date))
+        start, end = prev_range
+        # Clamp into valid range
         start = max(min_date, min(start, max_date))
         end = max(min_date, min(end, max_date))
         if start > end:
             start, end = min_date, max_date
-        st.session_state.date_range_v2 = (start, end)
 
         date_range = st.sidebar.slider(
             "Date range",
             min_value=min_date,
             max_value=max_date,
-            value=st.session_state.date_range_v2,
+            value=(start, end),
             key="date_range_v2",
         )
     else:
         date_range = None
 
-    # Apply filters to df
-    if st.session_state.product_filter_v2:
-        df = df[df["product"].isin(st.session_state.product_filter_v2)]
+    # Apply filters
+    if effective_products:
+        df = df[df["product"].isin(effective_products)]
 
     if date_range and not df["__date__"].isna().all():
         start, end = date_range
@@ -347,7 +337,7 @@ if df_raw is not None:
         if st.button("Save", use_container_width=True):
             if preset_name.strip():
                 st.session_state.filter_presets_v2[preset_name.strip()] = {
-                    "products": list(st.session_state.product_filter_v2),
+                    "products": list(effective_products),
                     "date_range": st.session_state.get("date_range_v2"),
                 }
                 st.sidebar.success(f"Saved preset: {preset_name.strip()}")
@@ -358,10 +348,11 @@ if df_raw is not None:
         if st.button("Load", use_container_width=True):
             if selected_preset != "(none)":
                 preset = st.session_state.filter_presets_v2[selected_preset]
+                # products
                 if "products" in preset:
-                    st.session_state.product_filter_v2 = [
-                        p for p in preset["products"] if p in product_options
-                    ] or product_options
+                    valid = [p for p in preset["products"] if p in product_options]
+                    st.session_state.product_filter_v2 = valid or product_options
+                # date range
                 if "date_range" in preset and preset["date_range"] is not None:
                     st.session_state.date_range_v2 = preset["date_range"]
                 st.sidebar.success(f"Loaded preset: {selected_preset}")
@@ -503,7 +494,7 @@ else:
 - Lets you map revenue, cost, date, and product columns.
 - Applies filters (date & product) with **saved presets**.
 - Shows KPIs, charts, tables, insights, and an executive summary.
-- Builds a simple 6-month trend-based view.
+- Builds a simple trend-based view.
 - Supports optional authentication, AI Insights, and PDF export via flags.
 
 ### How to turn features on/off
