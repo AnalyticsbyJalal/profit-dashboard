@@ -15,8 +15,8 @@ except Exception:  # pragma: no cover
 # -----------------------------------------------------------------------------
 # CONFIG FLAGS
 # -----------------------------------------------------------------------------
-ENABLE_AUTH = True           # Step 1 - simple password login
-ENABLE_AI_INSIGHTS = True    # Step 3 - AI narrative (requires OPENAI_API_KEY)
+ENABLE_AUTH = True           # simple password login
+ENABLE_AI_INSIGHTS = True    # AI narrative (requires OPENAI_API_KEY)
 
 
 # -----------------------------------------------------------------------------
@@ -55,7 +55,7 @@ def check_password() -> bool:
 # -----------------------------------------------------------------------------
 # DATA PREP + SUMMARY
 # -----------------------------------------------------------------------------
-def load_file(uploaded_file: st.runtime.uploaded_file_manager.UploadedFile) -> pd.DataFrame:
+def load_file(uploaded_file) -> pd.DataFrame:
     """Read CSV or Excel into a DataFrame."""
     name = uploaded_file.name.lower()
     try:
@@ -122,6 +122,10 @@ def prepare_data(
     cost_col: str | None,
     date_col: str | None,
     product_col: str | None,
+    region_col: str | None,
+    customer_col: str | None,
+    country_col: str | None,
+    category_col: str | None,
 ):
     """
     Clean and enrich the raw data:
@@ -129,6 +133,7 @@ def prepare_data(
       - parse dates
       - fill product if missing
       - compute profit and margin
+      - map optional region / customer / country / category
     Then build product_summary and monthly_summary.
     """
     if df_raw is None or df_raw.empty:
@@ -159,6 +164,30 @@ def prepare_data(
         df["__product__"] = df[product_col].fillna("Unknown").astype(str)
     else:
         df["__product__"] = "Unknown"
+
+    # Region
+    if region_col and region_col in df.columns:
+        df["__region__"] = df[region_col].fillna("Unspecified Region").astype(str)
+    else:
+        df["__region__"] = "Unspecified Region"
+
+    # Customer
+    if customer_col and customer_col in df.columns:
+        df["__customer__"] = df[customer_col].fillna("Unspecified Customer").astype(str)
+    else:
+        df["__customer__"] = "Unspecified Customer"
+
+    # Country
+    if country_col and country_col in df.columns:
+        df["__country__"] = df[country_col].fillna("Unspecified Country").astype(str)
+    else:
+        df["__country__"] = "Unspecified Country"
+
+    # Category
+    if category_col and category_col in df.columns:
+        df["__category__"] = df[category_col].fillna("Unspecified Category").astype(str)
+    else:
+        df["__category__"] = "Unspecified Category"
 
     # Profit & margin
     df["__profit__"] = df["__revenue__"] - df["__cost__"]
@@ -367,7 +396,7 @@ Total profit: {total_profit:,.2f}
 
 Write a concise narrative (3–5 short paragraphs) that covers:
 - key revenue and profit drivers,
-- product performance highlights,
+- product, region, and customer performance highlights (if present),
 - month-over-month and high-level trend commentary,
 - 2–3 concrete business recommendations.
 
@@ -455,6 +484,10 @@ def main():
     cost_guess = guess_column_index(cols, ["cost", "cogs", "expense"])
     date_guess = guess_column_index(cols, ["date", "month", "period"])
     prod_guess = guess_column_index(cols, ["product", "sku", "item", "name"])
+    region_guess = guess_column_index(cols, ["region", "area", "zone"])
+    customer_guess = guess_column_index(cols, ["customer", "client", "account", "cust"])
+    country_guess = guess_column_index(cols, ["country", "nation"])
+    category_guess = guess_column_index(cols, ["category", "segment", "type", "class"])
 
     col1, col2, col3, col4 = st.columns(4)
     with col1:
@@ -494,6 +527,49 @@ def main():
         if product_col == "(none)":
             product_col = None
 
+    # Second row for Region / Customer / Country / Category
+    col5, col6, col7, col8 = st.columns(4)
+    with col5:
+        region_options = ["(none)"] + cols
+        region_index = (region_guess + 1) if region_guess is not None else 0
+        region_col = st.selectbox(
+            "Region column (optional)",
+            region_options,
+            index=region_index if region_index < len(region_options) else 0,
+        )
+        if region_col == "(none)":
+            region_col = None
+    with col6:
+        customer_options = ["(none)"] + cols
+        customer_index = (customer_guess + 1) if customer_guess is not None else 0
+        customer_col = st.selectbox(
+            "Customer column (optional)",
+            customer_options,
+            index=customer_index if customer_index < len(customer_options) else 0,
+        )
+        if customer_col == "(none)":
+            customer_col = None
+    with col7:
+        country_options = ["(none)"] + cols
+        country_index = (country_guess + 1) if country_guess is not None else 0
+        country_col = st.selectbox(
+            "Country column (optional)",
+            country_options,
+            index=country_index if country_index < len(country_options) else 0,
+        )
+        if country_col == "(none)":
+            country_col = None
+    with col8:
+        category_options = ["(none)"] + cols
+        category_index = (category_guess + 1) if category_guess is not None else 0
+        category_col = st.selectbox(
+            "Category column (optional)",
+            category_options,
+            index=category_index if category_index < len(category_options) else 0,
+        )
+        if category_col == "(none)":
+            category_col = None
+
     # -------------------------------------------------------------------------
     # PREPARE DATA
     # -------------------------------------------------------------------------
@@ -503,6 +579,10 @@ def main():
         cost_col=cost_col,
         date_col=date_col,
         product_col=product_col,
+        region_col=region_col,
+        customer_col=customer_col,
+        country_col=country_col,
+        category_col=category_col,
     )
 
     if df.empty:
@@ -510,11 +590,14 @@ def main():
         return
 
     # -------------------------------------------------------------------------
-    # FILTERS (product & date range)
+    # FILTERS (Product / Region / Customer / Country / Category / Date)
     # -------------------------------------------------------------------------
     st.sidebar.header("Filters")
 
+    mask = pd.Series(True, index=df.index)
+
     # Product filter
+    selected_products = None
     if "__product__" in df.columns:
         product_options = sorted(df["__product__"].unique())
         selected_products = st.sidebar.multiselect(
@@ -522,12 +605,64 @@ def main():
             product_options,
             default=product_options,
         )
-    else:
-        selected_products = None
+        if selected_products:
+            mask &= df["__product__"].isin(selected_products)
+
+    # Region filter
+    selected_regions = None
+    if "__region__" in df.columns:
+        region_opts = sorted(df["__region__"].unique())
+        # If all are "Unspecified Region", no point showing filter
+        if not (len(region_opts) == 1 and region_opts[0] == "Unspecified Region"):
+            selected_regions = st.sidebar.multiselect(
+                "Regions",
+                region_opts,
+                default=region_opts,
+            )
+            if selected_regions:
+                mask &= df["__region__"].isin(selected_regions)
+
+    # Customer filter
+    selected_customers = None
+    if "__customer__" in df.columns:
+        customer_opts = sorted(df["__customer__"].unique())
+        if not (len(customer_opts) == 1 and customer_opts[0] == "Unspecified Customer"):
+            selected_customers = st.sidebar.multiselect(
+                "Customers",
+                customer_opts,
+                default=customer_opts,
+            )
+            if selected_customers:
+                mask &= df["__customer__"].isin(selected_customers)
+
+    # Country filter
+    selected_countries = None
+    if "__country__" in df.columns:
+        country_opts = sorted(df["__country__"].unique())
+        if not (len(country_opts) == 1 and country_opts[0] == "Unspecified Country"):
+            selected_countries = st.sidebar.multiselect(
+                "Countries",
+                country_opts,
+                default=country_opts,
+            )
+            if selected_countries:
+                mask &= df["__country__"].isin(selected_countries)
+
+    # Category filter
+    selected_categories = None
+    if "__category__" in df.columns:
+        category_opts = sorted(df["__category__"].unique())
+        if not (len(category_opts) == 1 and category_opts[0] == "Unspecified Category"):
+            selected_categories = st.sidebar.multiselect(
+                "Categories",
+                category_opts,
+                default=category_opts,
+            )
+            if selected_categories:
+                mask &= df["__category__"].isin(selected_categories)
 
     # Date range filter
     has_dates = df["__date__"].notna().any()
-    date_range = None
     if has_dates:
         min_date = df["__date__"].min().date()
         max_date = df["__date__"].max().date()
@@ -535,25 +670,24 @@ def main():
             "Date range",
             value=(min_date, max_date),
         )
-        # Safety: ensure it's a tuple of 2 dates
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             start_date, end_date = date_range
         else:
             start_date, end_date = min_date, max_date
-    else:
-        start_date, end_date = None, None
 
-    # Apply filters
-    mask = pd.Series(True, index=df.index)
-    if selected_products is not None:
-        mask &= df["__product__"].isin(selected_products)
-    if has_dates and start_date and end_date:
         mask &= df["__date__"].between(
             pd.to_datetime(start_date),
             pd.to_datetime(end_date),
         )
+    else:
+        start_date = end_date = None
+        st.sidebar.info("No valid date column mapped; date filter disabled.")
 
     df_filtered = df[mask].copy()
+    if df_filtered.empty:
+        st.warning("No data after filters. Try relaxing some filters.")
+        return
+
     product_summary, monthly_summary = summarize_prepared(df_filtered)
 
     total_revenue = float(df_filtered["__revenue__"].sum())
@@ -596,7 +730,6 @@ def main():
     else:
         st.info("No product data available for the current filters.")
 
-    # Product table
     st.markdown("### 📋 Product Performance Table")
     if not product_summary.empty:
         st.dataframe(
@@ -613,7 +746,6 @@ def main():
     if not monthly_summary.empty and len(monthly_summary) >= 3:
         forecast_df = build_forecast(monthly_summary, periods=12)
         if forecast_df is not None:
-            # 3-, 6-, 12-month revenue projections (sum of forecast periods)
             future_part = forecast_df[forecast_df["Type"] == "Forecast"].copy()
             if not future_part.empty:
                 rev_3 = future_part["Revenue"].head(3).sum()
@@ -624,7 +756,6 @@ def main():
                     f"**6 months**: `${rev_6:,.0f}`  |  **12 months**: `${rev_12:,.0f}`"
                 )
 
-            # Chart
             chart_data = forecast_df.set_index("Month")[["Revenue", "Type"]]
             actual = chart_data[chart_data["Type"] == "Actual"][["Revenue"]].rename(
                 columns={"Revenue": "Actual Revenue"}
