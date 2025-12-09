@@ -45,7 +45,7 @@ def require_auth():
     st.sidebar.markdown("### 🔐 Login")
     password = st.sidebar.text_input("Password", type="password")
 
-    expected_pwd = st.secrets.get("APP_PASSWORD", "jalal123")
+    expected_pwd = st.secrets.get("APP_PASSWORD", "Jarvis1997$")
 
     if st.sidebar.button("Unlock"):
         if password == expected_pwd:
@@ -664,3 +664,4 @@ Planned upgrades:
 # ================================================================
 if __name__ == "__main__":
     main()
+
