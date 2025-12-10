@@ -512,7 +512,6 @@ def build_pdf_report(
     y -= 16
     c.setFont("Helvetica", 10)
 
-    # Wrap exec summary
     from textwrap import wrap
 
     for line in wrap(exec_summary, width=100):
@@ -541,7 +540,7 @@ def build_pdf_report(
                 y -= 12
             y -= 4
 
-    # New page for tables if needed
+    # New page for tables
     c.showPage()
     y = height - 50
 
@@ -621,7 +620,7 @@ def build_pdf_report(
 
 
 # -----------------------------------------------------------------------------
-# MAIN APP
+# MAIN APP (MULTI-PAGE)
 # -----------------------------------------------------------------------------
 def main():
     if not check_password():
@@ -875,57 +874,121 @@ def main():
     total_profit = float(df_filtered["__profit__"].sum())
     overall_margin = (total_profit / total_revenue * 100.0) if total_revenue != 0 else 0.0
 
-    # -------------------------------------------------------------------------
-    # KPI CARDS
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📌 Key Metrics (filtered)")
-
-    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
-    kpi1.metric("Total Revenue", f"${total_revenue:,.0f}")
-    kpi2.metric("Total Cost", f"${total_cost:,.0f}")
-    kpi3.metric("Total Profit", f"${total_profit:,.0f}")
-    kpi4.metric("Profit Margin", f"{overall_margin:.1f}%")
+    # Precompute global things used in multiple pages
+    text_insights = generate_text_insights(product_summary, monthly_summary)
+    exec_summary = generate_exec_summary(product_summary, monthly_summary)
+    forecast_df = build_forecast(monthly_summary, periods=12) if not monthly_summary.empty else None
 
     # -------------------------------------------------------------------------
-    # CHARTS
+    # MULTI-PAGE NAV
     # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📈 Revenue & Profit Over Time")
-
-    if not monthly_summary.empty:
-        chart_df = monthly_summary.set_index("Month")[["Revenue", "Profit"]]
-        st.line_chart(chart_df, use_container_width=True)
-    else:
-        st.info("No valid date column selected or no data in chosen date range.")
-
-    st.markdown("### 🏷️ Top Products by Profit")
-    if not product_summary.empty:
-        top_n = (
-            product_summary.sort_values("Profit", ascending=False)
-            .head(10)
-            .set_index("Product")
-        )
-        st.bar_chart(top_n["Profit"], use_container_width=True)
-    else:
-        st.info("No product data available for the current filters.")
-
-    st.markdown("### 📋 Product Performance Table")
-    if not product_summary.empty:
-        st.dataframe(
-            product_summary.sort_values("Profit", ascending=False),
-            use_container_width=True,
-        )
+    page = st.sidebar.radio(
+        "📂 View",
+        ["Overview", "Product Performance", "Customer & Region", "Forecasting", "AI & Reports"],
+        index=0,
+    )
 
     # -------------------------------------------------------------------------
-    # FORECASTING
+    # PAGE: OVERVIEW
     # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📈 Forecasting (linear trend on monthly revenue)")
+    if page == "Overview":
+        st.markdown("---")
+        st.subheader("📌 Key Metrics (filtered)")
 
-    if not monthly_summary.empty and len(monthly_summary) >= 3:
-        forecast_df = build_forecast(monthly_summary, periods=12)
-        if forecast_df is not None:
+        kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+        kpi1.metric("Total Revenue", f"${total_revenue:,.0f}")
+        kpi2.metric("Total Cost", f"${total_cost:,.0f}")
+        kpi3.metric("Total Profit", f"${total_profit:,.0f}")
+        kpi4.metric("Profit Margin", f"{overall_margin:.1f}%")
+
+        st.markdown("---")
+        st.subheader("📈 Revenue & Profit Over Time")
+
+        if not monthly_summary.empty:
+            chart_df = monthly_summary.set_index("Month")[["Revenue", "Profit"]]
+            st.line_chart(chart_df, use_container_width=True)
+        else:
+            st.info("No valid date column selected or no data in chosen date range.")
+
+        st.markdown("---")
+        st.subheader("📋 Executive Summary")
+        st.write(exec_summary)
+
+    # -------------------------------------------------------------------------
+    # PAGE: PRODUCT PERFORMANCE
+    # -------------------------------------------------------------------------
+    elif page == "Product Performance":
+        st.markdown("---")
+        st.subheader("🏷️ Top Products by Profit")
+
+        if not product_summary.empty:
+            top_n = (
+                product_summary.sort_values("Profit", ascending=False)
+                .head(10)
+                .set_index("Product")
+            )
+            st.bar_chart(top_n["Profit"], use_container_width=True)
+        else:
+            st.info("No product data available for the current filters.")
+
+        st.markdown("### 📋 Product Performance Table")
+        if not product_summary.empty:
+            st.dataframe(
+                product_summary.sort_values("Profit", ascending=False),
+                use_container_width=True,
+            )
+
+    # -------------------------------------------------------------------------
+    # PAGE: CUSTOMER & REGION
+    # -------------------------------------------------------------------------
+    elif page == "Customer & Region":
+        st.markdown("---")
+        st.subheader("🌍 Region & Country Breakdown")
+
+        # Region chart
+        if "__region__" in df_filtered.columns and df_filtered["__region__"].nunique() > 1:
+            region_perf = (
+                df_filtered.groupby("__region__")
+                .agg(Revenue=("__revenue__", "sum"), Profit=("__profit__", "sum"))
+                .sort_values("Profit", ascending=False)
+            )
+            st.markdown("#### Profit by Region")
+            st.bar_chart(region_perf["Profit"], use_container_width=True)
+        else:
+            st.info("No detailed region data available after filters.")
+
+        # Country chart
+        if "__country__" in df_filtered.columns and df_filtered["__country__"].nunique() > 1:
+            country_perf = (
+                df_filtered.groupby("__country__")
+                .agg(Revenue=("__revenue__", "sum"), Profit=("__profit__", "sum"))
+                .sort_values("Profit", ascending=False)
+            )
+            st.markdown("#### Profit by Country")
+            st.bar_chart(country_perf["Profit"], use_container_width=True)
+
+        st.markdown("---")
+        st.subheader("👤 Customer Performance")
+
+        if "__customer__" in df_filtered.columns and df_filtered["__customer__"].nunique() > 1:
+            customer_perf = (
+                df_filtered.groupby("__customer__")
+                .agg(Revenue=("__revenue__", "sum"), Profit=("__profit__", "sum"))
+                .sort_values("Profit", ascending=False)
+            )
+            st.markdown("#### Top 15 Customers by Profit")
+            st.dataframe(customer_perf.head(15), use_container_width=True)
+        else:
+            st.info("No detailed customer data available after filters.")
+
+    # -------------------------------------------------------------------------
+    # PAGE: FORECASTING
+    # -------------------------------------------------------------------------
+    elif page == "Forecasting":
+        st.markdown("---")
+        st.subheader("📈 Forecasting (linear trend on monthly revenue)")
+
+        if not monthly_summary.empty and len(monthly_summary) >= 3 and forecast_df is not None:
             future_part = forecast_df[forecast_df["Type"] == "Forecast"].copy()
             if not future_part.empty:
                 rev_3 = future_part["Revenue"].head(3).sum()
@@ -945,76 +1008,66 @@ def main():
             )
             combined_chart = actual.join(fc, how="outer")
             st.line_chart(combined_chart, use_container_width=True)
-    else:
-        st.info("Need at least 3 months of data (after filters) to generate a forecast.")
+
+            st.markdown("💬 _Forecast is based on a simple linear trend. We can later upgrade this to Prophet for seasonality._")
+        else:
+            st.info("Need at least 3 months of data (after filters) to generate a forecast.")
 
     # -------------------------------------------------------------------------
-    # TEXTUAL INSIGHTS
+    # PAGE: AI & REPORTS
     # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("💡 Insights")
+    elif page == "AI & Reports":
+        st.markdown("---")
+        st.subheader("📋 Executive Summary")
+        st.write(exec_summary)
 
-    text_insights = generate_text_insights(product_summary, monthly_summary)
-    if not text_insights:
-        st.write("Insights will appear here once enough data is available.")
-    else:
-        for bullet in text_insights:
-            st.markdown(f"- {bullet}")
+        st.markdown("---")
+        st.subheader("💡 Insights")
+        if not text_insights:
+            st.write("Insights will appear here once enough data is available.")
+        else:
+            for bullet in text_insights:
+                st.markdown(f"- {bullet}")
 
-    # -------------------------------------------------------------------------
-    # EXECUTIVE SUMMARY
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("📋 Executive Summary")
+        st.markdown("---")
+        st.subheader("🧾 Download Report")
 
-    exec_summary = generate_exec_summary(product_summary, monthly_summary)
-    st.write(exec_summary)
-
-    # -------------------------------------------------------------------------
-    # PDF EXPORT (Upgrade 5)
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("🧾 Download Report")
-
-    if not REPORTLAB_AVAILABLE:
-        st.info(
-            "To enable PDF export, add `reportlab` to your `requirements.txt`.\n\n"
-            "Example:\n\n"
-            "`reportlab`\n"
-        )
-    else:
-        pdf_bytes = build_pdf_report(
-            total_revenue=total_revenue,
-            total_cost=total_cost,
-            total_profit=total_profit,
-            overall_margin=overall_margin,
-            product_summary=product_summary,
-            monthly_summary=monthly_summary,
-            exec_summary=exec_summary,
-            insights=text_insights,
-        )
-        st.download_button(
-            label="📥 Download PDF Report",
-            data=pdf_bytes,
-            file_name="business_performance_report.pdf",
-            mime="application/pdf",
-        )
-
-    # -------------------------------------------------------------------------
-    # AI INSIGHTS (based on filtered data)
-    # -------------------------------------------------------------------------
-    st.markdown("---")
-    st.subheader("🤖 AI Insights (beta)")
-
-    if st.button("Generate AI Narrative"):
-        with st.spinner("Calling OpenAI and generating narrative..."):
-            ai_text = generate_ai_narrative(
+        if not REPORTLAB_AVAILABLE:
+            st.info(
+                "To enable PDF export, add `reportlab` to your `requirements.txt`.\n\n"
+                "Example:\n\n"
+                "`reportlab`\n"
+            )
+        else:
+            pdf_bytes = build_pdf_report(
+                total_revenue=total_revenue,
+                total_cost=total_cost,
+                total_profit=total_profit,
+                overall_margin=overall_margin,
                 product_summary=product_summary,
                 monthly_summary=monthly_summary,
-                total_revenue=total_revenue,
-                total_profit=total_profit,
+                exec_summary=exec_summary,
+                insights=text_insights,
             )
-        st.markdown(ai_text)
+            st.download_button(
+                label="📥 Download PDF Report",
+                data=pdf_bytes,
+                file_name="business_performance_report.pdf",
+                mime="application/pdf",
+            )
+
+        st.markdown("---")
+        st.subheader("🤖 AI Insights (beta)")
+
+        if st.button("Generate AI Narrative"):
+            with st.spinner("Calling OpenAI and generating narrative..."):
+                ai_text = generate_ai_narrative(
+                    product_summary=product_summary,
+                    monthly_summary=monthly_summary,
+                    total_revenue=total_revenue,
+                    total_profit=total_profit,
+                )
+            st.markdown(ai_text)
 
 
 # -----------------------------------------------------------------------------
