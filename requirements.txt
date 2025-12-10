@@ -4,6 +4,8 @@ numpy
 plotly
 openpyxl
 openai
+reportlab
+
 
 
 
