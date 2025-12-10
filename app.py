@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, date
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
@@ -668,6 +669,17 @@ def build_pdf_report(
 
 
 # -----------------------------------------------------------------------------
+# DATA EXPORT HELPERS
+# -----------------------------------------------------------------------------
+def df_to_excel_bytes(df: pd.DataFrame) -> bytes:
+    """Convert a DataFrame to Excel bytes for download."""
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False)
+    return buffer.getvalue()
+
+
+# -----------------------------------------------------------------------------
 # MAIN APP (MULTI-PAGE)
 # -----------------------------------------------------------------------------
 def main():
@@ -1016,6 +1028,64 @@ def main():
         st.subheader("📋 Executive Summary")
         st.write(exec_summary)
 
+        # NEW: Data exports from Overview (filtered)
+        st.markdown("---")
+        st.subheader("📥 Download Data (filtered view)")
+
+        col_dl1, col_dl2, col_dl3 = st.columns(3)
+        with col_dl1:
+            if st.button("Prepare filtered data (Excel)"):
+                st.session_state["filtered_data_ready"] = True
+        with col_dl2:
+            if st.button("Prepare product summary (Excel)"):
+                st.session_state["product_summary_ready"] = True
+        with col_dl3:
+            if st.button("Prepare monthly summary (Excel)"):
+                st.session_state["monthly_summary_ready"] = True
+
+        # Show download buttons if prepared
+        if st.session_state.get("filtered_data_ready", False):
+            try:
+                excel_bytes = df_to_excel_bytes(df_filtered)
+                st.download_button(
+                    label="⬇️ Download filtered data (Excel)",
+                    data=excel_bytes,
+                    file_name="filtered_data.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            except Exception as e:
+                st.error(f"Error exporting filtered data: {e}")
+
+        if st.session_state.get("product_summary_ready", False):
+            if product_summary.empty:
+                st.info("Product summary is empty for the current filters.")
+            else:
+                try:
+                    excel_bytes_ps = df_to_excel_bytes(product_summary)
+                    st.download_button(
+                        label="⬇️ Download product summary (Excel)",
+                        data=excel_bytes_ps,
+                        file_name="product_summary.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                except Exception as e:
+                    st.error(f"Error exporting product summary: {e}")
+
+        if st.session_state.get("monthly_summary_ready", False):
+            if monthly_summary.empty:
+                st.info("Monthly summary is empty for the current filters.")
+            else:
+                try:
+                    excel_bytes_ms = df_to_excel_bytes(monthly_summary)
+                    st.download_button(
+                        label="⬇️ Download monthly summary (Excel)",
+                        data=excel_bytes_ms,
+                        file_name="monthly_summary.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                except Exception as e:
+                    st.error(f"Error exporting monthly summary: {e}")
+
     # -------------------------------------------------------------------------
     # PAGE: PRODUCT PERFORMANCE
     # -------------------------------------------------------------------------
@@ -1154,7 +1224,7 @@ def main():
                         f"**6 months**: `${rev_6:,.0f}`  |  **12 months**: `${rev_12:,.0f}`"
                     )
 
-                    # Build chart with bands
+                    # Build chart
                     chart_df = prophet_df.set_index("Month")[["yhat", "yhat_lower", "yhat_upper", "Type"]]
                     actual_series = chart_df[chart_df["Type"] == "Actual"][["yhat"]].rename(
                         columns={"yhat": "Actual Revenue"}
@@ -1164,11 +1234,10 @@ def main():
                     )
 
                     combined = actual_series.join(fc_series, how="outer")
-
                     st.line_chart(combined, use_container_width=True)
 
                     st.caption(
-                        "Shaded range represents Prophet's lower/upper forecast interval (visible in the data table below)."
+                        "Lower/upper forecast interval is available in the data table below (Prophet output)."
                     )
 
                     with st.expander("📊 Prophet raw forecast data"):
