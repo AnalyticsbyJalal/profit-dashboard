@@ -626,19 +626,20 @@ def main():
     if not check_password():
         return
 
-    # --- PAGE CONFIG (branding) ---
+    # PAGE CONFIG + BRANDED HEADER
     st.set_page_config(
         page_title="AnalyticsByJalal — Profit Dashboard",
-        page_icon="📊",  # you can also use "logo.png" if you prefer
+        page_icon="📊",
         layout="wide",
         initial_sidebar_state="expanded",
     )
 
-    # --- HEADER WITH LOGO + TITLE ---
     header_col1, header_col2 = st.columns([1, 5])
     with header_col1:
         if os.path.exists("logo.png"):
-            st.image("logo.png", use_container_width=True)
+            st.image("logo.png", use_column_width=True) if hasattr(st, "image") else None
+        else:
+            st.write("")
     with header_col2:
         st.markdown(
             """
@@ -651,16 +652,6 @@ def main():
             """,
             unsafe_allow_html=True,
         )
-
-    # -------------------------------------------------------------------------
-    # SIDEBAR: upload
-    # -------------------------------------------------------------------------
-    st.sidebar.header("Upload your data")
-    uploaded_files = st.sidebar.file_uploader(
-        "Upload one or more CSV/XLSX files",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
-    )
 
     # -------------------------------------------------------------------------
     # SIDEBAR: upload
@@ -1103,4 +1094,3 @@ def main():
 # -----------------------------------------------------------------------------
 if __name__ == "__main__":
     main()
-
