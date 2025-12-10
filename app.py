@@ -11,6 +11,15 @@ try:
 except Exception:  # pragma: no cover
     OpenAI = None
 
+# Optional: PDF generation for reports
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import inch
+    REPORTLAB_AVAILABLE = True
+except Exception:
+    REPORTLAB_AVAILABLE = False
+
 
 # -----------------------------------------------------------------------------
 # CONFIG FLAGS
@@ -434,6 +443,184 @@ def guess_column_index(columns: list[str], keywords: list[str]) -> int | None:
 
 
 # -----------------------------------------------------------------------------
+# PDF REPORT GENERATION
+# -----------------------------------------------------------------------------
+def build_pdf_report(
+    total_revenue: float,
+    total_cost: float,
+    total_profit: float,
+    overall_margin: float,
+    product_summary: pd.DataFrame,
+    monthly_summary: pd.DataFrame,
+    exec_summary: str,
+    insights: list[str],
+) -> bytes:
+    """
+    Build a simple but professional PDF report with:
+    - Logo (if logo.png exists)
+    - Title + date
+    - KPIs
+    - Executive Summary
+    - Insights bullets
+    - Top products (limited)
+    - Monthly summary (limited)
+    Returns PDF as bytes.
+    """
+    from io import BytesIO
+
+    buffer = BytesIO()
+    c = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+
+    y = height - 50
+
+    # Logo
+    logo_path = "logo.png"
+    if os.path.exists(logo_path):
+        try:
+            c.drawImage(logo_path, 40, y - 40, width=100, preserveAspectRatio=True, mask="auto")
+        except Exception:
+            pass
+
+    # Title
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(160, y - 10, "Business Performance Report")
+
+    c.setFont("Helvetica", 10)
+    c.drawString(160, y - 26, f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+
+    y -= 70
+
+    # KPIs
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(40, y, "Key Metrics")
+    y -= 16
+    c.setFont("Helvetica", 10)
+    c.drawString(50, y, f"Total Revenue: ${total_revenue:,.0f}")
+    y -= 14
+    c.drawString(50, y, f"Total Cost:    ${total_cost:,.0f}")
+    y -= 14
+    c.drawString(50, y, f"Total Profit:  ${total_profit:,.0f}")
+    y -= 14
+    c.drawString(50, y, f"Profit Margin: {overall_margin:.1f}%")
+
+    y -= 24
+
+    # Executive Summary
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(40, y, "Executive Summary")
+    y -= 16
+    c.setFont("Helvetica", 10)
+
+    # Wrap exec summary
+    from textwrap import wrap
+
+    for line in wrap(exec_summary, width=100):
+        if y < 80:
+            c.showPage()
+            y = height - 50
+            c.setFont("Helvetica", 10)
+        c.drawString(50, y, line)
+        y -= 12
+
+    y -= 18
+
+    # Insights
+    if insights:
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(40, y, "Key Insights")
+        y -= 16
+        c.setFont("Helvetica", 10)
+        for bullet in insights[:5]:
+            for line in wrap(bullet, width=95):
+                if y < 80:
+                    c.showPage()
+                    y = height - 50
+                    c.setFont("Helvetica", 10)
+                c.drawString(50, y, f"- {line}")
+                y -= 12
+            y -= 4
+
+    # New page for tables if needed
+    c.showPage()
+    y = height - 50
+
+    # Top Products
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(40, y, "Top Products by Profit")
+    y -= 18
+    c.setFont("Helvetica", 9)
+
+    if not product_summary.empty:
+        top_products = product_summary.sort_values("Profit", ascending=False).head(10)
+        c.drawString(50, y, "Product")
+        c.drawString(220, y, "Revenue")
+        c.drawString(320, y, "Profit")
+        c.drawString(410, y, "Margin %")
+        y -= 12
+        c.line(50, y, 500, y)
+        y -= 12
+
+        for _, row in top_products.iterrows():
+            if y < 80:
+                c.showPage()
+                y = height - 50
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Top Products by Profit (cont.)")
+                y -= 18
+                c.setFont("Helvetica", 9)
+
+            c.drawString(50, y, str(row["Product"])[:22])
+            c.drawRightString(290, y, f"${row['Revenue']:,.0f}")
+            c.drawRightString(380, y, f"${row['Profit']:,.0f}")
+            c.drawRightString(470, y, f"{row['Margin %']:,.1f}%")
+            y -= 12
+    else:
+        c.drawString(50, y, "No product data available for this period.")
+        y -= 14
+
+    # Monthly summary
+    if not monthly_summary.empty:
+        y -= 24
+        if y < 120:
+            c.showPage()
+            y = height - 50
+
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(40, y, "Monthly Performance")
+        y -= 18
+        c.setFont("Helvetica", 9)
+
+        c.drawString(50, y, "Month")
+        c.drawRightString(220, y, "Revenue")
+        c.drawRightString(320, y, "Profit")
+        y -= 12
+        c.line(50, y, 500, y)
+        y -= 12
+
+        for _, row in monthly_summary.sort_values("Month").tail(18).iterrows():
+            if y < 80:
+                c.showPage()
+                y = height - 50
+                c.setFont("Helvetica-Bold", 12)
+                c.drawString(40, y, "Monthly Performance (cont.)")
+                y -= 18
+                c.setFont("Helvetica", 9)
+
+            month_str = row["Month"].strftime("%Y-%m")
+            c.drawString(50, y, month_str)
+            c.drawRightString(220, y, f"${row['Revenue']:,.0f}")
+            c.drawRightString(320, y, f"${row['Profit']:,.0f}")
+            y -= 12
+
+    c.showPage()
+    c.save()
+    pdf_bytes = buffer.getvalue()
+    buffer.close()
+    return pdf_bytes
+
+
+# -----------------------------------------------------------------------------
 # MAIN APP
 # -----------------------------------------------------------------------------
 def main():
@@ -527,7 +714,6 @@ def main():
         if product_col == "(none)":
             product_col = None
 
-    # Second row for Region / Customer / Country / Category
     col5, col6, col7, col8 = st.columns(4)
     with col5:
         region_options = ["(none)"] + cols
@@ -597,7 +783,6 @@ def main():
     mask = pd.Series(True, index=df.index)
 
     # Product filter
-    selected_products = None
     if "__product__" in df.columns:
         product_options = sorted(df["__product__"].unique())
         selected_products = st.sidebar.multiselect(
@@ -609,10 +794,8 @@ def main():
             mask &= df["__product__"].isin(selected_products)
 
     # Region filter
-    selected_regions = None
     if "__region__" in df.columns:
         region_opts = sorted(df["__region__"].unique())
-        # If all are "Unspecified Region", no point showing filter
         if not (len(region_opts) == 1 and region_opts[0] == "Unspecified Region"):
             selected_regions = st.sidebar.multiselect(
                 "Regions",
@@ -623,7 +806,6 @@ def main():
                 mask &= df["__region__"].isin(selected_regions)
 
     # Customer filter
-    selected_customers = None
     if "__customer__" in df.columns:
         customer_opts = sorted(df["__customer__"].unique())
         if not (len(customer_opts) == 1 and customer_opts[0] == "Unspecified Customer"):
@@ -636,7 +818,6 @@ def main():
                 mask &= df["__customer__"].isin(selected_customers)
 
     # Country filter
-    selected_countries = None
     if "__country__" in df.columns:
         country_opts = sorted(df["__country__"].unique())
         if not (len(country_opts) == 1 and country_opts[0] == "Unspecified Country"):
@@ -649,7 +830,6 @@ def main():
                 mask &= df["__country__"].isin(selected_countries)
 
     # Category filter
-    selected_categories = None
     if "__category__" in df.columns:
         category_opts = sorted(df["__category__"].unique())
         if not (len(category_opts) == 1 and category_opts[0] == "Unspecified Category"):
@@ -789,6 +969,36 @@ def main():
 
     exec_summary = generate_exec_summary(product_summary, monthly_summary)
     st.write(exec_summary)
+
+    # -------------------------------------------------------------------------
+    # PDF EXPORT (Upgrade 5)
+    # -------------------------------------------------------------------------
+    st.markdown("---")
+    st.subheader("🧾 Download Report")
+
+    if not REPORTLAB_AVAILABLE:
+        st.info(
+            "To enable PDF export, add `reportlab` to your `requirements.txt`.\n\n"
+            "Example:\n\n"
+            "`reportlab`\n"
+        )
+    else:
+        pdf_bytes = build_pdf_report(
+            total_revenue=total_revenue,
+            total_cost=total_cost,
+            total_profit=total_profit,
+            overall_margin=overall_margin,
+            product_summary=product_summary,
+            monthly_summary=monthly_summary,
+            exec_summary=exec_summary,
+            insights=text_insights,
+        )
+        st.download_button(
+            label="📥 Download PDF Report",
+            data=pdf_bytes,
+            file_name="business_performance_report.pdf",
+            mime="application/pdf",
+        )
 
     # -------------------------------------------------------------------------
     # AI INSIGHTS (based on filtered data)
