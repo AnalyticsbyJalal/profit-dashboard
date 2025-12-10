@@ -5,6 +5,7 @@ plotly
 openpyxl
 openai
 reportlab
+Prophet
 
 
 
