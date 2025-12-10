@@ -634,12 +634,24 @@ def main():
         initial_sidebar_state="expanded",
     )
 
+    # Make content a bit closer to the top
+    st.markdown(
+        """
+        <style>
+        .block-container { padding-top: 1rem; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Branded header
     header_col1, header_col2 = st.columns([1, 5])
     with header_col1:
         if os.path.exists("logo.png"):
-            st.image("logo.png", use_column_width=True) if hasattr(st, "image") else None
+            # Just call st.image normally – no tricks, no docs
+            st.image("logo.png", use_column_width=True)
         else:
-            st.write("")
+            st.empty()
     with header_col2:
         st.markdown(
             """
