@@ -29,6 +29,17 @@ ENABLE_AI_INSIGHTS = True    # AI narrative (requires OPENAI_API_KEY)
 
 
 # -----------------------------------------------------------------------------
+# PAGE CONFIG (must be first Streamlit call)
+# -----------------------------------------------------------------------------
+st.set_page_config(
+    page_title="AnalyticsByJalal — Profit Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+
+# -----------------------------------------------------------------------------
 # AUTHENTICATION
 # -----------------------------------------------------------------------------
 def check_password() -> bool:
@@ -80,6 +91,7 @@ def load_file(uploaded_file) -> pd.DataFrame:
         return pd.DataFrame()
 
 
+@st.cache_data(show_spinner=False)
 def summarize_prepared(df: pd.DataFrame):
     """Build product_summary and monthly_summary from df that already has internal columns."""
     if df is None or df.empty:
@@ -328,6 +340,7 @@ def generate_exec_summary(product_summary: pd.DataFrame, monthly_summary: pd.Dat
 # -----------------------------------------------------------------------------
 # FORECASTING
 # -----------------------------------------------------------------------------
+@st.cache_data(show_spinner=False)
 def build_forecast(monthly_summary: pd.DataFrame, periods: int = 12) -> pd.DataFrame | None:
     """
     Simple linear-trend forecast on monthly revenue.
@@ -626,29 +639,54 @@ def main():
     if not check_password():
         return
 
-    # PAGE CONFIG + BRANDED HEADER
-    st.set_page_config(
-        page_title="AnalyticsByJalal — Profit Dashboard",
-        page_icon="📊",
-        layout="wide",
-        initial_sidebar_state="expanded",
-    )
+    # -------------------------------------------------------------------------
+    # THEME TOGGLE (Light / Dark)
+    # -------------------------------------------------------------------------
+    theme = st.sidebar.radio("🎨 Theme", ["Light", "Dark"], index=0)
 
-    # Make content a bit closer to the top
-    st.markdown(
-        """
-        <style>
-        .block-container { padding-top: 1rem; }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    if theme == "Dark":
+        st.markdown(
+            """
+            <style>
+            .block-container {
+                padding-top: 1rem;
+                background-color: #0e1117;
+                color: #f9fafb;
+            }
+            body {
+                background-color: #0e1117;
+            }
+            .stApp {
+                background-color: #0e1117;
+            }
+            .stMetric-value, .stMetric-label {
+                color: #f9fafb !important;
+            }
+            .css-1d391kg, .css-18e3th9 {  /* sidebar area */
+                background-color: #111827 !important;
+                color: #f9fafb !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        # Light mode: just tighten top padding
+        st.markdown(
+            """
+            <style>
+            .block-container { padding-top: 1rem; }
+            </style>
+            """,
+            unsafe_allow_html=True,
+        )
 
+    # -------------------------------------------------------------------------
     # Branded header
+    # -------------------------------------------------------------------------
     header_col1, header_col2 = st.columns([1, 5])
     with header_col1:
         if os.path.exists("logo.png"):
-            # Just call st.image normally – no tricks, no docs
             st.image("logo.png", use_column_width=True)
         else:
             st.empty()
@@ -657,7 +695,7 @@ def main():
             """
             <div style="padding-left: 10px;">
                 <h1 style="margin-bottom: 0;">AnalyticsByJalal Dashboard</h1>
-                <p style="color: #555; margin-top: 4px;">
+                <p style="color: #9ca3af; margin-top: 4px;">
                     Profitability • Performance • Forecasts • AI Insights
                 </p>
             </div>
