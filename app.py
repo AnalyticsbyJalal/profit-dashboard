@@ -20,6 +20,13 @@ try:
 except Exception:
     REPORTLAB_AVAILABLE = False
 
+# Optional: Prophet for advanced forecasting
+try:
+    from prophet import Prophet
+    PROPHET_AVAILABLE = True
+except Exception:
+    PROPHET_AVAILABLE = False
+
 
 # -----------------------------------------------------------------------------
 # CONFIG FLAGS
@@ -341,7 +348,7 @@ def generate_exec_summary(product_summary: pd.DataFrame, monthly_summary: pd.Dat
 # FORECASTING
 # -----------------------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def build_forecast(monthly_summary: pd.DataFrame, periods: int = 12) -> pd.DataFrame | None:
+def build_linear_forecast(monthly_summary: pd.DataFrame, periods: int = 12) -> pd.DataFrame | None:
     """
     Simple linear-trend forecast on monthly revenue.
     Returns DataFrame with Month, Revenue, Type (Actual/Forecast).
@@ -374,6 +381,34 @@ def build_forecast(monthly_summary: pd.DataFrame, periods: int = 12) -> pd.DataF
 
     combined = pd.concat([actual_df, forecast_df], ignore_index=True)
     return combined
+
+
+@st.cache_data(show_spinner=False)
+def build_prophet_forecast(monthly_summary: pd.DataFrame, periods: int = 12) -> pd.DataFrame | None:
+    """
+    Advanced forecast using Prophet (if available).
+    Returns DataFrame with Month, yhat, yhat_lower, yhat_upper, Type.
+    """
+    if not PROPHET_AVAILABLE:
+        return None
+    if monthly_summary is None or monthly_summary.empty or len(monthly_summary) < 3:
+        return None
+
+    ms = monthly_summary.sort_values("Month").copy()
+    df_p = ms[["Month", "Revenue"]].rename(columns={"Month": "ds", "Revenue": "y"})
+
+    m = Prophet()
+    m.fit(df_p)
+
+    future = m.make_future_dataframe(periods=periods, freq="MS")  # Month Start
+    forecast = m.predict(future)
+
+    # Merge back actual vs forecast
+    merged = forecast[["ds", "yhat", "yhat_lower", "yhat_upper"]].copy()
+    merged["Type"] = np.where(merged["ds"].isin(df_p["ds"]), "Actual", "Forecast")
+    merged.rename(columns={"ds": "Month"}, inplace=True)
+
+    return merged
 
 
 # -----------------------------------------------------------------------------
@@ -662,7 +697,7 @@ def main():
             .stMetric-value, .stMetric-label {
                 color: #f9fafb !important;
             }
-            .css-1d391kg, .css-18e3th9 {  /* sidebar area */
+            .css-1d391kg, .css-18e3th9 {
                 background-color: #111827 !important;
                 color: #f9fafb !important;
             }
@@ -671,7 +706,6 @@ def main():
             unsafe_allow_html=True,
         )
     else:
-        # Light mode: just tighten top padding
         st.markdown(
             """
             <style>
@@ -946,7 +980,6 @@ def main():
     # Precompute global things used in multiple pages
     text_insights = generate_text_insights(product_summary, monthly_summary)
     exec_summary = generate_exec_summary(product_summary, monthly_summary)
-    forecast_df = build_forecast(monthly_summary, periods=12) if not monthly_summary.empty else None
 
     # -------------------------------------------------------------------------
     # MULTI-PAGE NAV
@@ -1055,32 +1088,94 @@ def main():
     # -------------------------------------------------------------------------
     elif page == "Forecasting":
         st.markdown("---")
-        st.subheader("📈 Forecasting (linear trend on monthly revenue)")
+        st.subheader("📈 Forecasting")
 
-        if not monthly_summary.empty and len(monthly_summary) >= 3 and forecast_df is not None:
-            future_part = forecast_df[forecast_df["Type"] == "Forecast"].copy()
-            if not future_part.empty:
-                rev_3 = future_part["Revenue"].head(3).sum()
-                rev_6 = future_part["Revenue"].head(6).sum()
-                rev_12 = future_part["Revenue"].head(12).sum()
-                st.write(
-                    f"Projected revenue over the next **3 months**: `${rev_3:,.0f}`  |  "
-                    f"**6 months**: `${rev_6:,.0f}`  |  **12 months**: `${rev_12:,.0f}`"
-                )
-
-            chart_data = forecast_df.set_index("Month")[["Revenue", "Type"]]
-            actual = chart_data[chart_data["Type"] == "Actual"][["Revenue"]].rename(
-                columns={"Revenue": "Actual Revenue"}
-            )
-            fc = chart_data[chart_data["Type"] == "Forecast"][["Revenue"]].rename(
-                columns={"Revenue": "Forecast Revenue"}
-            )
-            combined_chart = actual.join(fc, how="outer")
-            st.line_chart(combined_chart, use_container_width=True)
-
-            st.markdown("💬 _Forecast is based on a simple linear trend. We can later upgrade this to Prophet for seasonality._")
-        else:
+        if monthly_summary.empty or len(monthly_summary) < 3:
             st.info("Need at least 3 months of data (after filters) to generate a forecast.")
+        else:
+            model_choice = st.radio(
+                "Forecast model",
+                ["Linear trend", "Prophet (advanced)"],
+                index=0,
+                help="Prophet requires the `prophet` package in requirements.txt",
+            )
+
+            if model_choice == "Prophet (advanced)" and not PROPHET_AVAILABLE:
+                st.warning(
+                    "Prophet is not installed. Add `prophet` to your `requirements.txt` "
+                    "on GitHub to enable advanced forecasting. Falling back to linear trend."
+                )
+                model_choice = "Linear trend"
+
+            if model_choice == "Linear trend":
+                forecast_df = build_linear_forecast(monthly_summary, periods=12)
+                if forecast_df is None:
+                    st.info("Could not build linear forecast (not enough data).")
+                else:
+                    future_part = forecast_df[forecast_df["Type"] == "Forecast"].copy()
+                    if not future_part.empty:
+                        rev_3 = future_part["Revenue"].head(3).sum()
+                        rev_6 = future_part["Revenue"].head(6).sum()
+                        rev_12 = future_part["Revenue"].head(12).sum()
+                        st.write(
+                            f"Projected revenue over the next **3 months**: `${rev_3:,.0f}`  |  "
+                            f"**6 months**: `${rev_6:,.0f}`  |  **12 months**: `${rev_12:,.0f}`"
+                        )
+
+                    chart_data = forecast_df.set_index("Month")[["Revenue", "Type"]]
+                    actual = chart_data[chart_data["Type"] == "Actual"][["Revenue"]].rename(
+                        columns={"Revenue": "Actual Revenue"}
+                    )
+                    fc = chart_data[chart_data["Type"] == "Forecast"][["Revenue"]].rename(
+                        columns={"Revenue": "Forecast Revenue"}
+                    )
+                    combined_chart = actual.join(fc, how="outer")
+                    st.line_chart(combined_chart, use_container_width=True)
+
+                    st.markdown(
+                        "💬 _Forecast is based on a simple linear trend. Prophet is available as an upgrade when installed._"
+                    )
+
+            else:  # Prophet advanced
+                prophet_df = build_prophet_forecast(monthly_summary, periods=12)
+                if prophet_df is None:
+                    st.info("Could not build Prophet forecast (check data or installation).")
+                else:
+                    # Split actual vs forecast
+                    actual = prophet_df[prophet_df["Type"] == "Actual"].copy()
+                    fc = prophet_df[prophet_df["Type"] == "Forecast"].copy()
+
+                    # High-level numbers for forecast horizon
+                    rev_3 = fc["yhat"].head(3).sum()
+                    rev_6 = fc["yhat"].head(6).sum()
+                    rev_12 = fc["yhat"].head(12).sum()
+                    st.write(
+                        f"Projected revenue over the next **3 months** (Prophet): `${rev_3:,.0f}`  |  "
+                        f"**6 months**: `${rev_6:,.0f}`  |  **12 months**: `${rev_12:,.0f}`"
+                    )
+
+                    # Build chart with bands
+                    chart_df = prophet_df.set_index("Month")[["yhat", "yhat_lower", "yhat_upper", "Type"]]
+                    actual_series = chart_df[chart_df["Type"] == "Actual"][["yhat"]].rename(
+                        columns={"yhat": "Actual Revenue"}
+                    )
+                    fc_series = chart_df[chart_df["Type"] == "Forecast"][["yhat"]].rename(
+                        columns={"yhat": "Forecast Revenue"}
+                    )
+
+                    combined = actual_series.join(fc_series, how="outer")
+
+                    st.line_chart(combined, use_container_width=True)
+
+                    st.caption(
+                        "Shaded range represents Prophet's lower/upper forecast interval (visible in the data table below)."
+                    )
+
+                    with st.expander("📊 Prophet raw forecast data"):
+                        st.dataframe(
+                            prophet_df.tail(24)[["Month", "yhat", "yhat_lower", "yhat_upper", "Type"]],
+                            use_container_width=True,
+                        )
 
     # -------------------------------------------------------------------------
     # PAGE: AI & REPORTS
