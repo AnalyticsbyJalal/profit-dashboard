@@ -100,6 +100,52 @@ def load_file(uploaded_file) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
+def load_sample_data() -> pd.DataFrame:
+    """
+    Built-in demo dataset with:
+    - date, product, region, country, category, customer, revenue, cost
+    """
+    np.random.seed(42)
+
+    n_rows = 600
+    dates = pd.date_range(start="2023-01-01", periods=18, freq="MS")
+    products = ["Alpha", "Bravo", "Charlie", "Delta"]
+    regions = ["North", "South", "East", "West"]
+    countries = ["USA", "Canada", "Mexico"]
+    categories = ["Frozen", "Fresh", "Ambient"]
+    customers = [f"Customer_{i}" for i in range(1, 21)]
+
+    rows = []
+    for _ in range(n_rows):
+        d = np.random.choice(dates)
+        p = np.random.choice(products)
+        r = np.random.choice(regions)
+        ctry = np.random.choice(countries)
+        cat = np.random.choice(categories)
+        cust = np.random.choice(customers)
+        base_rev = np.random.uniform(500, 5000)
+        noise = np.random.normal(scale=300)
+        revenue = max(100, base_rev + noise)
+        cost = revenue * np.random.uniform(0.5, 0.85)
+        rows.append([d, p, r, ctry, cat, cust, revenue, cost])
+
+    df = pd.DataFrame(
+        rows,
+        columns=[
+            "date",
+            "product",
+            "region",
+            "country",
+            "category",
+            "customer",
+            "revenue",
+            "cost",
+        ],
+    )
+    return df
+
+
+@st.cache_data(show_spinner=False)
 def summarize_prepared(df: pd.DataFrame):
     """Build product_summary and monthly_summary from df that already has internal columns."""
     if df is None or df.empty:
@@ -750,24 +796,35 @@ def main():
         )
 
     # -------------------------------------------------------------------------
-    # SIDEBAR: upload
+    # SIDEBAR: data source + upload
     # -------------------------------------------------------------------------
-    st.sidebar.header("Upload your data")
-    uploaded_files = st.sidebar.file_uploader(
-        "Upload one or more CSV/XLSX files",
-        type=["csv", "xlsx", "xls"],
-        accept_multiple_files=True,
+    st.sidebar.header("Data Source")
+    data_source = st.sidebar.radio(
+        "Choose data source",
+        ["Upload your own file(s)", "Use demo sample data"],
+        index=0,
     )
 
     df_raw = pd.DataFrame()
-    if uploaded_files:
-        dfs = [load_file(f) for f in uploaded_files]
-        dfs = [d for d in dfs if not d.empty]
-        if dfs:
-            df_raw = pd.concat(dfs, ignore_index=True)
+
+    if data_source == "Use demo sample data":
+        df_raw = load_sample_data()
+        st.sidebar.success("Using built-in demo dataset.")
+    else:
+        st.sidebar.markdown("### Upload your data")
+        uploaded_files = st.sidebar.file_uploader(
+            "Upload one or more CSV/XLSX files",
+            type=["csv", "xlsx", "xls"],
+            accept_multiple_files=True,
+        )
+        if uploaded_files:
+            dfs = [load_file(f) for f in uploaded_files]
+            dfs = [d for d in dfs if not d.empty]
+            if dfs:
+                df_raw = pd.concat(dfs, ignore_index=True)
 
     if df_raw.empty:
-        st.info("Upload one or more CSV/XLSX files in the sidebar to get started.")
+        st.info("Upload one or more CSV/XLSX files in the sidebar or select 'Use demo sample data' to get started.")
         return
 
     with st.expander("🔍 Data preview", expanded=True):
